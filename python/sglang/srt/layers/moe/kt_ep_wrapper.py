@@ -3780,12 +3780,13 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
             ):
                 physical_to_logical_map_cpu = (
                     metadata.physical_to_logical_map_cpu[self.kt_config.layer_idx]
+                    .to(device="cpu", dtype=torch.int32)
                     .contiguous()
                 )
             else:
                 # Fallback for setups without EPLB metadata: identity mapping.
                 physical_to_logical_map_cpu = torch.arange(
-                    layer.num_experts, dtype=torch.int64, device="cpu"
+                    layer.num_experts, dtype=torch.int32, device="cpu"
                 )
             self.wrapper.load_weights(physical_to_logical_map_cpu)
             if self.kt_expert_lora_enabled:

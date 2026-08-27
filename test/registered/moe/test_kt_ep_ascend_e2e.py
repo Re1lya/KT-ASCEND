@@ -56,6 +56,49 @@ def test_kt_wrapper_is_skipped_for_all_accelerator_layers():
     assert layer_needs_kt_wrapper(one_cpu_expert)
 
 
+def test_llamafile_expert_mapping_is_int32_at_load_boundary(monkeypatch):
+    loaded_mappings = []
+
+    class _Wrapper:
+        def load_weights(self, mapping):
+            loaded_mappings.append(mapping)
+
+    class _GpuMethod:
+        def process_weights_after_loading(self, _layer):
+            pass
+
+    metadata = SimpleNamespace(
+        physical_to_logical_map_cpu=torch.arange(8, dtype=torch.int64).view(2, 4)
+    )
+    monkeypatch.setattr(
+        "sglang.srt.eplb.expert_location_dispatch.get_global_expert_location_metadata",
+        lambda: metadata,
+    )
+    monkeypatch.setattr(
+        torch,
+        "get_device_module",
+        lambda _device: SimpleNamespace(synchronize=lambda: None),
+    )
+
+    method = KTEPWrapperMethod.__new__(KTEPWrapperMethod)
+    method.gpu_method = _GpuMethod()
+    method.tp_rank = 0
+    method.wrapper = _Wrapper()
+    method.kt_config = SimpleNamespace(layer_idx=1)
+    method.kt_expert_lora_enabled = False
+    layer = SimpleNamespace(
+        parameters=lambda: iter([torch.empty(0)]), num_experts=4
+    )
+
+    method.process_weights_after_loading(layer)
+
+    assert len(loaded_mappings) == 1
+    assert loaded_mappings[0].device.type == "cpu"
+    assert loaded_mappings[0].dtype == torch.int32
+    assert loaded_mappings[0].is_contiguous()
+    assert loaded_mappings[0].tolist() == [4, 5, 6, 7]
+
+
 class _TorchNPUExpertMethod:
     """Small real-NPU provider for the two accelerator-owned fixture experts."""
 
