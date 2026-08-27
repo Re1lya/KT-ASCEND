@@ -18,6 +18,17 @@ import ctypes
 from kt_kernel import kt_kernel_ext
 
 
+def _allocate_cpu_expert_mask(num_experts: int, *, zero: bool) -> torch.Tensor:
+    """Prefer pinned storage, but remain usable in a CPU-only torch runtime."""
+    factory = torch.zeros if zero else torch.empty
+    try:
+        return factory(num_experts, dtype=torch.bool, device="cpu", pin_memory=True)
+    except RuntimeError as error:
+        if "pinned memory allocator" not in str(error) and "pin_memory=True" not in str(error):
+            raise
+        return factory(num_experts, dtype=torch.bool, device="cpu")
+
+
 def generate_gpu_experts_masks(
     activation_freq: torch.Tensor,
     num_gpu_experts: int,
@@ -310,10 +321,10 @@ class BaseMoEWrapper(_MoEBase, ABC):
         # This mask is shared between C and Python (C uses uint8_t*), both can read/write it
         if gpu_experts_mask is None:
             # No GPU experts - all experts on CPU
-            self.gpu_experts_mask = torch.zeros(num_experts, dtype=torch.bool, device="cpu", pin_memory=True)
+            self.gpu_experts_mask = _allocate_cpu_expert_mask(num_experts, zero=True)
         else:
             # Create a new pinned tensor and copy data into it
-            self.gpu_experts_mask = torch.empty(num_experts, dtype=torch.bool, device="cpu", pin_memory=True)
+            self.gpu_experts_mask = _allocate_cpu_expert_mask(num_experts, zero=False)
             self.gpu_experts_mask.copy_(gpu_experts_mask)
 
         self.num_gpu_experts = int(self.gpu_experts_mask.sum().item())
