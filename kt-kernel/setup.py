@@ -181,6 +181,8 @@ class CMakeBuild(build_ext):
             "features": set(),
             "raw": {"flags": set()},
         }
+        if info["arch"] in ("aarch64", "arm64"):
+            info["vendor"] = "arm"
         try:
             sysname = platform.system()
             if sysname == "Linux":

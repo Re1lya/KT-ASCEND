@@ -3,10 +3,10 @@
 
 """
 KT-Kernel provides high-performance kernel operations for KTransformers,
-including CPU-optimized MoE inference with AMX, AVX, and KML support.
+including CPU-optimized MoE inference on ARM and x86.
 
-The package automatically detects your CPU capabilities and loads the optimal
-kernel variant (AMX, AVX512, or AVX2) at runtime.
+The package automatically detects the CPU architecture and loads the matching
+ARM or optimized x86 kernel variant at runtime.
 
 Example usage:
     >>> from kt_kernel import KTMoEWrapper
@@ -26,10 +26,10 @@ Example usage:
 
     Check which CPU variant is loaded:
     >>> import kt_kernel
-    >>> print(kt_kernel.__cpu_variant__)  # 'amx', 'avx512', or 'avx2'
+    >>> print(kt_kernel.__cpu_variant__)  # 'arm', 'amx', 'avx512', or 'avx2'
 
 Environment Variables:
-    KT_KERNEL_CPU_VARIANT: Override automatic detection ('amx', 'avx512', 'avx2')
+    KT_KERNEL_CPU_VARIANT: Override automatic detection ('arm', 'amx', 'avx512', 'avx2')
     KT_KERNEL_DEBUG: Enable debug output ('1' to enable)
     KT_INT8_VNNI_BACKEND: Select the AVX512 INT8 backend ('auto', 'onednn', or 'native')
 """
