@@ -555,7 +555,11 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
         num_tokens = x.shape[0]
         topk_weights = topk_weights.to(x.dtype)
         topk_ids = topk_ids.to(torch.int32)
-        num_experts = layer.num_experts
+        # The routed IDs passed by KT are physical accelerator-local IDs.  A
+        # hybrid layer can therefore own fewer accelerator weights than its
+        # logical expert count (for example, 63 of 64 experts).  Ascend's
+        # grouped matmul requires expert_num/group_list to match weight dim 0.
+        num_experts = int(layer.w13_weight.shape[0])
         top_k = layer.top_k or topk_ids.shape[1]  # in case layer.top_k is not set
 
         hidden_states, expanded_row_idx, expert_tokens, _ = (
