@@ -4160,21 +4160,15 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         # Staging buffer allows GPU computation to proceed without waiting for D2H copy
         staging_buffer = None
         if self.tp_rank == 0 and self._cpu_stream is not None:
-            if x.device.type == "npu":
-                staging_buffer = x
-            else:
-                # Use shared staging buffer (shared across all MoE layers to save GPU memory)
-                assert self._shared_staging_buffer is not None, "Shared staging buffer not initialized"
-                staging_buffer = self._shared_staging_buffer.get_slice(x.shape[0])
+            # Use shared staging buffer (shared across all MoE layers to save GPU memory)
+            assert self._shared_staging_buffer is not None, "Shared staging buffer not initialized"
+            staging_buffer = self._shared_staging_buffer.get_slice(x.shape[0])
 
-                # Copy to staging buffer on main stream
-                staging_buffer.copy_(x, non_blocking=True)
+            # Copy to staging buffer on main stream
+            staging_buffer.copy_(x, non_blocking=True)
 
             # SGLANG_KT_HYBRID_NO_CPU_STREAM=1 collapses cpu_stream onto main stream.
-            _no_cpu_stream = (
-                os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
-                or x.device.type == "npu"
-            )
+            _no_cpu_stream = os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
             if not _no_cpu_stream:
                 # Fork to cpu_stream (waits for staging copy to complete)
                 self._cpu_stream.wait_stream(device_module.current_stream(x.device))
@@ -4266,10 +4260,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
 
         # Step 4: Sync CPU results on cpu_stream, then synchronize streams
         if self.tp_rank == 0 and self._cpu_stream is not None:
-            _no_cpu_stream = (
-                os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
-                or x.device.type == "npu"
-            )
+            _no_cpu_stream = os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
             from contextlib import nullcontext as _ctx_null
             _stream_ctx = (
                 _ctx_null()
