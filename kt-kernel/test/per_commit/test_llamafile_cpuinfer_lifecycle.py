@@ -156,7 +156,7 @@ def test_two_layers_use_distinct_gguf_keys(tmp_path):
         wrapper.load_weights()
         actual = wrapper.forward(hidden_states, expert_ids, routing_weights)
         expected = _reference(hidden_states, expert_ids, routing_weights, all_weights[layer_idx])
-        assert torch.equal(actual, expected)
+        torch.testing.assert_close(actual, expected, rtol=1e-2, atol=1e-3)
         outputs.append(actual)
 
     assert not torch.equal(outputs[0], outputs[1])
@@ -194,5 +194,5 @@ def test_threadpool_and_numa_mapping_are_observable(tmp_path, threadpool_count, 
     hidden_states, expert_ids, routing_weights = _inputs(tokens=2)
     actual = wrapper.forward(hidden_states, expert_ids, routing_weights)
     expected = _reference(hidden_states, expert_ids, routing_weights, weights[0])
-    assert torch.equal(actual, expected)
+    torch.testing.assert_close(actual, expected, rtol=1e-2, atol=1e-3)
     print(json.dumps(diagnostics, sort_keys=True))

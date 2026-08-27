@@ -73,10 +73,22 @@ def _assert_numerical(actual: torch.Tensor, expected: torch.Tensor) -> None:
     difference = actual.float() - expected.float()
     reference_norm = float(torch.linalg.vector_norm(expected.float()))
     relative_l2 = float(torch.linalg.vector_norm(difference)) / reference_norm if reference_norm else 0.0
+    max_abs = float(difference.abs().max())
+    mean_abs = float(difference.abs().mean())
+    print(
+        {
+            "max_abs_error": max_abs,
+            "mean_abs_error": mean_abs,
+            "relative_l2_error": relative_l2,
+        }
+    )
     assert torch.isfinite(actual).all()
-    assert float(difference.abs().max()) == 0.0
-    assert float(difference.abs().mean()) == 0.0
-    assert relative_l2 == 0.0
+    # Both paths return BF16. Different GEMM and accumulation orders may round
+    # by a small number of BF16 ULPs, while mapping/layout bugs are orders of
+    # magnitude larger for this deterministic fixture.
+    assert max_abs <= 1e-3
+    assert mean_abs <= 1e-4
+    assert relative_l2 <= 1e-2
 
 
 @pytest.mark.parametrize(

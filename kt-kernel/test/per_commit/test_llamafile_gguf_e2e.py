@@ -27,6 +27,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def test_fixture_is_byte_reproducible(tmp_path):
+    _first_path, first_manifest = tiny_fixture.create_fixture(tmp_path / "first.gguf", num_experts=4)
+    _second_path, second_manifest = tiny_fixture.create_fixture(tmp_path / "second.gguf", num_experts=4)
+
+    assert first_manifest == second_manifest
+    assert first_manifest["seed"] == 20260827
+    assert first_manifest["quant_type"] == "F32"
+
+
 def _reference(
     hidden_states: torch.Tensor,
     expert_ids: torch.Tensor,
@@ -76,10 +85,21 @@ def test_gguf_loader_to_llamafile_wrapper_e2e(tmp_path):
     actual = wrapper.forward(hidden_states, expert_ids, routing_weights, cuda_stream=None)
     expected = _reference(hidden_states, expert_ids, routing_weights, weights[0])
     difference = actual.float() - expected.float()
+    reference_norm = float(torch.linalg.vector_norm(expected.float()))
+    max_abs = float(difference.abs().max())
+    mean_abs = float(difference.abs().mean())
+    relative_l2 = float(torch.linalg.vector_norm(difference)) / reference_norm if reference_norm else 0.0
+    print(
+        {
+            "max_abs_error": max_abs,
+            "mean_abs_error": mean_abs,
+            "relative_l2_error": relative_l2,
+        }
+    )
 
     assert actual.shape == hidden_states.shape
     assert actual.dtype == torch.bfloat16
     assert torch.isfinite(actual).all()
-    assert float(difference.abs().max()) <= 0.0
-    assert float(difference.abs().mean()) <= 0.0
-    assert float(torch.linalg.vector_norm(difference)) <= 0.0
+    assert max_abs <= 1e-3
+    assert mean_abs <= 1e-4
+    assert relative_l2 <= 1e-2
