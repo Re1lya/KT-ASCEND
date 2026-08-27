@@ -561,7 +561,10 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
       .def("sync", &CPUInfer::sync, py::arg("allow_n_pending") = 0)
       .def("worker_pool_config", [](CPUInfer& self) { return self.backend_->config; })
       .def_readwrite("backend_", &CPUInfer::backend_)
-#ifndef KTRANSFORMERS_CPU_ONLY
+#if defined(KTRANSFORMERS_HAS_DEVICE_STREAM_CALLBACKS)
+      .def("sync_with_device_stream", &CPUInfer::sync_with_device_stream, py::arg("user_device_stream"),
+           py::arg("allow_n_pending") = 0)
+      .def("submit_with_device_stream", &CPUInfer::submit_with_device_stream)
       .def("sync_with_cuda_stream", &CPUInfer::sync_with_cuda_stream, py::arg("user_cuda_stream"),
            py::arg("allow_n_pending") = 0)
       .def("submit_with_cuda_stream", &CPUInfer::submit_with_cuda_stream)

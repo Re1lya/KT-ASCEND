@@ -17,16 +17,6 @@
 #include <queue>
 #include <thread>
 #include <vector>
-#if defined(KTRANSFORMERS_USE_CUDA) || defined(KTRANSFORMERS_USE_CUDA_HOST_CALLBACKS)
-#include "vendors/cuda.h"
-#elif KTRANSFORMERS_USE_MUSA
-#include "vendors/musa.h"
-#elif KTRANSFORMERS_USE_ROCM
-#define __HIP_PLATFORM_AMD__
-#include "vendors/hip.h"
-#elif KTRANSFORMERS_USE_MACA
-#include "vendors/maca.h"
-#endif
 
 #include "./vendors/vendor.h"
 #include "llama.cpp/ggml-impl.h"
@@ -83,15 +73,16 @@ class CPUInfer {
     *((CPUInfer**)args) = this;
     func(args);
   }
-#ifndef KTRANSFORMERS_CPU_ONLY
-  void submit_with_cuda_stream(intptr_t user_cuda_stream, std::pair<intptr_t, intptr_t> params) {
-#if defined(KTRANSFORMERS_USE_CUDA) || defined(KTRANSFORMERS_USE_CUDA_HOST_CALLBACKS) || \
-    defined(KTRANSFORMERS_USE_MUSA) || defined(KTRANSFORMERS_USE_ROCM) || defined(KTRANSFORMERS_USE_MACA)
+#if defined(KTRANSFORMERS_HAS_DEVICE_STREAM_CALLBACKS)
+  void submit_with_device_stream(uintptr_t user_device_stream, std::pair<intptr_t, intptr_t> params) {
     void (*func)(void*) = (void (*)(void*))params.first;
     void* args = (void*)params.second;
     *((CPUInfer**)args) = this;
-    cudaLaunchHostFunc((cudaStream_t)user_cuda_stream, (cudaHostFn_t)func, args);
-#endif
+    KTRANSFORMERS_VENDOR_LAUNCH_HOST_FUNCTION(user_device_stream, func, args);
+  }
+
+  void submit_with_cuda_stream(intptr_t user_cuda_stream, std::pair<intptr_t, intptr_t> params) {
+    submit_with_device_stream(static_cast<uintptr_t>(user_cuda_stream), params);
   }
 #endif
 
@@ -109,13 +100,14 @@ class CPUInfer {
     SyncArgs* args = new SyncArgs{this, allow_n_pending};
     sync_(args);
   }
-#ifndef KTRANSFORMERS_CPU_ONLY
-  void sync_with_cuda_stream(intptr_t user_cuda_stream, size_t allow_n_pending = 0) {
-#if defined(KTRANSFORMERS_USE_CUDA) || defined(KTRANSFORMERS_USE_CUDA_HOST_CALLBACKS) || \
-    defined(KTRANSFORMERS_USE_MUSA) || defined(KTRANSFORMERS_USE_ROCM) || defined(KTRANSFORMERS_USE_MACA)
+#if defined(KTRANSFORMERS_HAS_DEVICE_STREAM_CALLBACKS)
+  void sync_with_device_stream(uintptr_t user_device_stream, size_t allow_n_pending = 0) {
     SyncArgs* args = new SyncArgs{this, allow_n_pending};
-    cudaLaunchHostFunc((cudaStream_t)user_cuda_stream, (cudaHostFn_t)&sync_, (void*)args);
-#endif
+    KTRANSFORMERS_VENDOR_LAUNCH_HOST_FUNCTION(user_device_stream, &sync_, args);
+  }
+
+  void sync_with_cuda_stream(intptr_t user_cuda_stream, size_t allow_n_pending = 0) {
+    sync_with_device_stream(static_cast<uintptr_t>(user_cuda_stream), allow_n_pending);
   }
 #endif
  public:
