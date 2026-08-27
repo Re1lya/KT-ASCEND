@@ -57,7 +57,7 @@ def test_gguf_loader_to_llamafile_wrapper_e2e(tmp_path):
         layer_idx=0,
         num_experts=4,
         num_experts_per_tok=2,
-        hidden_size=32,
+        hidden_size=tiny_fixture.DEFAULT_HIDDEN_SIZE,
         moe_intermediate_size=256,
         gpu_experts_mask=None,
         cpuinfer_threads=4,
@@ -70,7 +70,7 @@ def test_gguf_loader_to_llamafile_wrapper_e2e(tmp_path):
     wrapper.load_weights()
 
     torch.manual_seed(tiny_fixture.SEED + 1)
-    hidden_states = torch.randn(1, 32, dtype=torch.bfloat16)
+    hidden_states = torch.randn(1, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
     expert_ids = torch.tensor([[1, 3]], dtype=torch.int64)
     routing_weights = torch.tensor([[0.7, 0.3]], dtype=torch.float32)
     actual = wrapper.forward(hidden_states, expert_ids, routing_weights, cuda_stream=None)

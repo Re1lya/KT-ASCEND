@@ -49,7 +49,7 @@ def _wrapper(
         layer_idx=layer_idx,
         num_experts=num_experts,
         num_experts_per_tok=2,
-        hidden_size=32,
+        hidden_size=tiny_fixture.DEFAULT_HIDDEN_SIZE,
         moe_intermediate_size=intermediate_size,
         gpu_experts_mask=None,
         cpuinfer_threads=4,
@@ -63,7 +63,7 @@ def _wrapper(
 
 def _inputs(tokens: int = 1):
     torch.manual_seed(tiny_fixture.SEED + tokens)
-    hidden_states = torch.randn(tokens, 32, dtype=torch.bfloat16)
+    hidden_states = torch.randn(tokens, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
     expert_ids = torch.tensor([[1, 3]], dtype=torch.int64).repeat(tokens, 1)
     routing_weights = torch.tensor([[0.7, 0.3]], dtype=torch.float32).repeat(tokens, 1)
     return hidden_states, expert_ids, routing_weights

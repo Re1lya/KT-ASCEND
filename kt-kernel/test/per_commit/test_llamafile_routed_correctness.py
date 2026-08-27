@@ -31,7 +31,7 @@ def _make_wrapper(path: Path, *, num_experts: int, layer_idx: int = 0):
         layer_idx=layer_idx,
         num_experts=num_experts,
         num_experts_per_tok=2,
-        hidden_size=32,
+        hidden_size=tiny_fixture.DEFAULT_HIDDEN_SIZE,
         moe_intermediate_size=256,
         gpu_experts_mask=None,
         cpuinfer_threads=4,
@@ -94,7 +94,7 @@ def test_top2_routing_and_physical_to_logical_mapping(tmp_path, num_experts, map
     wrapper.load_weights(physical_to_logical_map)
 
     torch.manual_seed(tiny_fixture.SEED + num_experts)
-    hidden_states = torch.randn(1, 32, dtype=torch.bfloat16)
+    hidden_states = torch.randn(1, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
     expert_ids = torch.tensor([[1, 3]], dtype=torch.int64)
     routing_weights = torch.tensor([[0.7, 0.3]], dtype=torch.float32)
     actual = wrapper.forward(hidden_states, expert_ids, routing_weights)
@@ -112,7 +112,7 @@ def test_decode_and_prefill_token_layout(tmp_path, qlen):
     wrapper.load_weights(mapping)
 
     torch.manual_seed(tiny_fixture.SEED + qlen)
-    hidden_states = torch.randn(qlen, 32, dtype=torch.bfloat16)
+    hidden_states = torch.randn(qlen, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
     first_ids = torch.arange(qlen, dtype=torch.int64).remainder(4)
     second_ids = (first_ids + 2).remainder(4)
     expert_ids = torch.stack((first_ids, second_ids), dim=1)
@@ -120,7 +120,7 @@ def test_decode_and_prefill_token_layout(tmp_path, qlen):
     actual = wrapper.forward(hidden_states, expert_ids, routing_weights)
     expected = _reference(hidden_states, expert_ids, routing_weights, weights[0], mapping)
 
-    assert actual.shape == (qlen, 32)
+    assert actual.shape == (qlen, tiny_fixture.DEFAULT_HIDDEN_SIZE)
     _assert_numerical(actual, expected)
 
 
@@ -132,7 +132,7 @@ def test_router_weight_edges_and_expert_selection(tmp_path):
     wrapper.load_weights(mapping)
 
     torch.manual_seed(tiny_fixture.SEED + 99)
-    hidden_states = torch.randn(2, 32, dtype=torch.bfloat16)
+    hidden_states = torch.randn(2, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
     expert_ids = torch.tensor([[1, 3], [1, 2]], dtype=torch.int64)
     routing_weights = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
     actual = wrapper.forward(hidden_states, expert_ids, routing_weights)

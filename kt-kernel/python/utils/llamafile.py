@@ -95,6 +95,11 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
                 f"intermediate_size ({moe_intermediate_size}) must be divisible by QK_K ({QK_K}) "
                 f"for Llamafile backend"
             )
+        if hidden_size % QK_K != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by QK_K ({QK_K}) "
+                "for the Llamafile prefill path"
+            )
 
         # Calculate TP splits with QK_K alignment
         num_blocks = moe_intermediate_size // QK_K
