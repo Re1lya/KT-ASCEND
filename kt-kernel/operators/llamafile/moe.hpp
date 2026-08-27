@@ -191,10 +191,7 @@ class LLAMA_MOE_TP {
 
   ~LLAMA_MOE_TP() { shared_mem_buffer_numa.dealloc(tp_part_idx, this); }
 
-  void load_weights(int complete_intermediate_size, int offset) {
-    auto local_gate_proj = m_local_gate_proj_;
-    auto local_up_proj = m_local_up_proj_;
-    auto local_down_proj = m_local_down_proj_;
+  void load_weights(int complete_intermediate_size, int offset, const int32_t* physical_to_logical_map) {
     auto& config = config_;
     // printf("gate load weights:");
     // debug_quant(config.gate_proj, (ggml_type)config.gate_type);
@@ -214,16 +211,31 @@ class LLAMA_MOE_TP {
              ggml_blck_size((ggml_type)config.gate_type));
       throw std::runtime_error("intermediate_size * hidden_size must be a multiple of gate_type blck size");
     }
-    uint8_t* gate_proj = (uint8_t*)config.gate_proj + offset * config.hidden_size *
-                                                          ggml_type_size((ggml_type)config.gate_type) /
-                                                          ggml_blck_size((ggml_type)config.gate_type);
-    uint8_t* up_proj = (uint8_t*)config.up_proj + offset * config.hidden_size *
-                                                      ggml_type_size((ggml_type)config.up_type) /
-                                                      ggml_blck_size((ggml_type)config.up_type);
-    uint8_t* down_proj = (uint8_t*)config.down_proj + offset * ggml_type_size((ggml_type)config.down_type) /
-                                                          ggml_blck_size((ggml_type)config.down_type);
+    const size_t gate_element_size = ggml_type_size((ggml_type)config.gate_type);
+    const size_t gate_block_size = ggml_blck_size((ggml_type)config.gate_type);
+    const size_t up_element_size = ggml_type_size((ggml_type)config.up_type);
+    const size_t up_block_size = ggml_blck_size((ggml_type)config.up_type);
+    const size_t down_element_size = ggml_type_size((ggml_type)config.down_type);
+    const size_t down_block_size = ggml_blck_size((ggml_type)config.down_type);
 
-    for (int i = 0; i < config.expert_num; ++i) {
+    for (int physical_id = 0; physical_id < config.expert_num; ++physical_id) {
+      const int logical_id = physical_to_logical_map == nullptr ? physical_id : physical_to_logical_map[physical_id];
+      if (logical_id < 0 || logical_id >= config.expert_num) {
+        throw std::runtime_error("physical_to_logical_map contains an out-of-range logical expert ID");
+      }
+      auto* local_gate_proj = m_local_gate_proj_ +
+                              logical_id * config.intermediate_size * config.hidden_size * gate_element_size /
+                                  gate_block_size;
+      auto* local_up_proj = m_local_up_proj_ +
+                            logical_id * config.intermediate_size * config.hidden_size * up_element_size /
+                                up_block_size;
+      auto* gate_proj = (uint8_t*)config.gate_proj +
+                        (physical_id * complete_intermediate_size + offset) * config.hidden_size * gate_element_size /
+                            gate_block_size;
+      auto* up_proj = (uint8_t*)config.up_proj +
+                      (physical_id * complete_intermediate_size + offset) * config.hidden_size * up_element_size /
+                          up_block_size;
+
       memcpy(local_gate_proj, gate_proj,
              config.intermediate_size * config.hidden_size * ggml_type_size((ggml_type)config.gate_type) /
                  ggml_blck_size((ggml_type)config.gate_type));
@@ -231,22 +243,18 @@ class LLAMA_MOE_TP {
              config.intermediate_size * config.hidden_size * ggml_type_size((ggml_type)config.up_type) /
                  ggml_blck_size((ggml_type)config.up_type));
       for (int j = 0; j < config.hidden_size; ++j) {
+        auto* local_down_proj = m_local_down_proj_ +
+                                (logical_id * config.hidden_size * config.intermediate_size +
+                                 j * config.intermediate_size) *
+                                    down_element_size / down_block_size;
+        auto* down_proj = (uint8_t*)config.down_proj +
+                          (physical_id * config.hidden_size * complete_intermediate_size +
+                           j * complete_intermediate_size + offset) *
+                              down_element_size / down_block_size;
         memcpy(local_down_proj, down_proj,
                config.intermediate_size * ggml_type_size((ggml_type)config.down_type) /
                    ggml_blck_size((ggml_type)config.down_type));
-        local_down_proj += config.intermediate_size * ggml_type_size((ggml_type)config.down_type) /
-                           ggml_blck_size((ggml_type)config.down_type);
-        down_proj += complete_intermediate_size * ggml_type_size((ggml_type)config.down_type) /
-                     ggml_blck_size((ggml_type)config.down_type);
       }
-      local_gate_proj += config.intermediate_size * config.hidden_size * ggml_type_size((ggml_type)config.gate_type) /
-                         ggml_blck_size((ggml_type)config.gate_type);
-      local_up_proj += config.intermediate_size * config.hidden_size * ggml_type_size((ggml_type)config.up_type) /
-                       ggml_blck_size((ggml_type)config.up_type);
-      gate_proj += complete_intermediate_size * config.hidden_size * ggml_type_size((ggml_type)config.gate_type) /
-                   ggml_blck_size((ggml_type)config.gate_type);
-      up_proj += complete_intermediate_size * config.hidden_size * ggml_type_size((ggml_type)config.up_type) /
-                 ggml_blck_size((ggml_type)config.up_type);
     }
   }
 
@@ -781,7 +789,8 @@ class TP_MOE<LLAMA_MOE_TP> : public TP_MOE_Common<LLAMA_MOE_TP> {
     }
 
     pool->dispense_backend()->do_numa_job([this, pool, tp_offsets](int tp_id) {
-      this->tps[tp_id]->load_weights(this->config.intermediate_size, tp_offsets[tp_id]);
+      this->tps[tp_id]->load_weights(this->config.intermediate_size, tp_offsets[tp_id],
+                                     static_cast<const int32_t*>(this->config.physical_to_logical_map));
     });
     this->weights_loaded = true;
   }

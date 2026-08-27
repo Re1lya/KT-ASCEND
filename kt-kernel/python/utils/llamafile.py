@@ -25,6 +25,7 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
     """
 
     _gguf_loader_instance = None  # Singleton GGUFLoader
+    _gguf_loader_path = None
 
     def __init__(
         self,
@@ -73,9 +74,16 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
         if not os.path.exists(weight_path):
             raise FileNotFoundError(f"GGUF weight path not found: {weight_path}")
 
-        # Initialize GGUF loader (singleton)
-        if LlamafileMoEWrapper._gguf_loader_instance is None:
-            LlamafileMoEWrapper._gguf_loader_instance = GGUFLoader(weight_path)
+        # Reuse the loader only for the same canonical path. A process may
+        # construct wrappers for different local fixtures or model shards over
+        # its lifetime; reusing a loader from another path returns stale keys.
+        canonical_weight_path = os.path.realpath(weight_path)
+        if (
+            LlamafileMoEWrapper._gguf_loader_instance is None
+            or LlamafileMoEWrapper._gguf_loader_path != canonical_weight_path
+        ):
+            LlamafileMoEWrapper._gguf_loader_instance = GGUFLoader(canonical_weight_path)
+            LlamafileMoEWrapper._gguf_loader_path = canonical_weight_path
         self.gguf_loader = LlamafileMoEWrapper._gguf_loader_instance
 
         # Validate TP configuration with QK_K alignment
@@ -173,6 +181,19 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
         if physical_to_logical_map_cpu is None:
             physical_to_logical_map_cpu = torch.arange(self.num_experts, dtype=torch.int32, device="cpu")
             print(f"  Using default identity mapping for {self.num_experts} experts")
+        else:
+            if physical_to_logical_map_cpu.device.type != "cpu":
+                raise ValueError("physical_to_logical_map_cpu must be a CPU tensor")
+            if physical_to_logical_map_cpu.dtype != torch.int32:
+                raise ValueError("physical_to_logical_map_cpu must use torch.int32")
+            physical_to_logical_map_cpu = physical_to_logical_map_cpu.contiguous().view(-1)
+            if physical_to_logical_map_cpu.numel() != self.num_experts:
+                raise ValueError(
+                    "physical_to_logical_map_cpu must contain exactly "
+                    f"{self.num_experts} entries, got {physical_to_logical_map_cpu.numel()}"
+                )
+            if torch.sort(physical_to_logical_map_cpu).values.tolist() != list(range(self.num_experts)):
+                raise ValueError("physical_to_logical_map_cpu must be a permutation of all logical expert IDs")
 
         base_key = f"blk.{self.layer_idx}"
 
@@ -225,3 +246,45 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
 
         # Drop original weights after loading
         self.weights_to_keep = None
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        topk_ids: torch.Tensor,
+        topk_weights: torch.Tensor,
+        cuda_stream=None,
+    ) -> torch.Tensor:
+        """Run LLAMAFILE directly on CPU, or retain the existing stream path."""
+        if hidden_states.device.type != "cpu" or cuda_stream is not None:
+            return super().forward(hidden_states, topk_ids, topk_weights, cuda_stream)
+        if self.moe is None:
+            raise RuntimeError("load_weights() must be called before forward()")
+        if hidden_states.dtype != torch.bfloat16:
+            raise ValueError(f"LLAMAFILE CPU input must use torch.bfloat16, got {hidden_states.dtype}")
+
+        original_shape = hidden_states.shape
+        flat_hidden_states = hidden_states.contiguous().view(-1, self.hidden_size)
+        token_count = flat_hidden_states.shape[0]
+        expert_ids = topk_ids.to(device="cpu", dtype=torch.int64).contiguous().view(-1, self.num_experts_per_tok)
+        routing_weights = (
+            topk_weights.to(device="cpu", dtype=torch.float32).contiguous().view(-1, self.num_experts_per_tok)
+        )
+        if expert_ids.shape[0] != token_count or routing_weights.shape[0] != token_count:
+            raise ValueError(
+                "hidden_states, topk_ids, and topk_weights must describe the same flattened token count"
+            )
+
+        qlen = torch.tensor([token_count], dtype=torch.int32, device="cpu")
+        output = torch.empty_like(flat_hidden_states)
+        self.cpu_infer.submit(
+            self.moe.forward_task(
+                qlen.data_ptr(),
+                self.num_experts_per_tok,
+                expert_ids.data_ptr(),
+                routing_weights.data_ptr(),
+                flat_hidden_states.data_ptr(),
+                output.data_ptr(),
+            )
+        )
+        self.cpu_infer.sync()
+        return output.view(original_shape)
