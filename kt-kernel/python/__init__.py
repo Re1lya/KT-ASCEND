@@ -38,6 +38,7 @@ from __future__ import annotations
 
 # Detect CPU and load optimal extension variant
 from ._cpu_detect import initialize as _initialize_cpu
+from .device_stream import get_current_device_stream_handle
 
 _kt_kernel_ext, __cpu_variant__ = _initialize_cpu()
 __cpu_variant__ = getattr(_kt_kernel_ext, "__cpu_variant__", __cpu_variant__)
@@ -107,6 +108,7 @@ __all__ = [
     "generate_gpu_experts_masks",
     "kt_kernel_ext",
     "__cpu_variant__",
+    "get_current_device_stream_handle",
     "__int8_kernel__",
     "__int8_weight_layout__",
     "__version__",
