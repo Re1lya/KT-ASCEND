@@ -20,6 +20,7 @@ from sglang.srt.eplb.expert_distribution import (
 from sglang.srt.layers.moe.kt_ep_wrapper import (
     KTEPWrapperMethod,
     SharedStagingBuffer,
+    layer_needs_kt_wrapper,
 )
 from sglang.srt.layers.moe.token_dispatcher.standard import (
     StandardCombineInput,
@@ -46,6 +47,13 @@ SPEC.loader.exec_module(tiny_fixture)
 class _Recorder:
     def on_gpu_expert_mask(self, _layer_idx, _mask):
         pass
+
+
+def test_kt_wrapper_is_skipped_for_all_accelerator_layers():
+    assert not layer_needs_kt_wrapper(torch.ones(64, dtype=torch.bool))
+    one_cpu_expert = torch.ones(64, dtype=torch.bool)
+    one_cpu_expert[6] = False
+    assert layer_needs_kt_wrapper(one_cpu_expert)
 
 
 class _TorchNPUExpertMethod:

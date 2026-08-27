@@ -3189,6 +3189,12 @@ def create_kt_config_from_server_args(
 
     # Get mask for this specific layer
     gpu_experts_mask = masks[layer_idx]
+    if not layer_needs_kt_wrapper(gpu_experts_mask):
+        logger.info(
+            "Skipping KT wrapper for all-accelerator layer %d",
+            layer_idx,
+        )
+        return None
 
     return KTConfig(
         layer_idx=layer_idx,
@@ -3205,6 +3211,15 @@ def create_kt_config_from_server_args(
         kt_enable_dynamic_expert_update=server_args.kt_enable_dynamic_expert_update,
         expert_lora_path=getattr(server_args, "kt_expert_lora_path", None),
     )
+
+
+def layer_needs_kt_wrapper(gpu_experts_mask: torch.Tensor) -> bool:
+    """Return whether a layer has at least one CPU-owned routed expert."""
+    if gpu_experts_mask.device.type != "cpu":
+        raise ValueError("gpu_experts_mask must be a CPU tensor")
+    if gpu_experts_mask.dtype != torch.bool or gpu_experts_mask.ndim != 1:
+        raise ValueError("gpu_experts_mask must be a rank-1 bool tensor")
+    return not bool(gpu_experts_mask.all().item())
 
 
 @torch.compile(dynamic=True, backend=get_compiler_backend())
