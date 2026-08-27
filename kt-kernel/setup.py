@@ -42,7 +42,9 @@ GPU backends:
   CPUINFER_USE_ROCM=0/1           -DKTRANSFORMERS_USE_ROCM
   CPUINFER_USE_MUSA=0/1           -DKTRANSFORMERS_USE_MUSA
   CPUINFER_USE_MACA=0/1           -DKTRANSFORMERS_USE_MACA
+  CPUINFER_USE_ASCEND=0/1         -DKTRANSFORMERS_USE_ASCEND
   MACA_PATH=/opt/maca             MACA SDK root
+  ASCEND_HOME_PATH=/path/to/cann  CANN toolkit root
 
 Usage:
   pip install .
@@ -537,7 +539,13 @@ class CMakeBuild(build_ext):
         if cuda_env is None:
             requested_non_cuda_gpu = any(
                 _env_get_bool(name, False)
-                for name in ("CPUINFER_USE_SYCL", "CPUINFER_USE_ROCM", "CPUINFER_USE_MUSA", "CPUINFER_USE_MACA")
+                for name in (
+                    "CPUINFER_USE_SYCL",
+                    "CPUINFER_USE_ROCM",
+                    "CPUINFER_USE_MUSA",
+                    "CPUINFER_USE_MACA",
+                    "CPUINFER_USE_ASCEND",
+                )
             )
             if requested_non_cuda_gpu:
                 os.environ["CPUINFER_USE_CUDA"] = "0"
@@ -555,6 +563,7 @@ class CMakeBuild(build_ext):
                 ("ROCM", "CPUINFER_USE_ROCM"),
                 ("MUSA", "CPUINFER_USE_MUSA"),
                 ("MACA", "CPUINFER_USE_MACA"),
+                ("ASCEND", "CPUINFER_USE_ASCEND"),
             )
             if _env_get_bool(env_name, False)
         ]
@@ -718,6 +727,11 @@ class CMakeBuild(build_ext):
             if maca_path and not os.environ.get("MACA_PATH"):
                 cmake_args.append(f"-DMACA_PATH={maca_path}")
             print("-- Enabling MACA backend (-DKTRANSFORMERS_USE_MACA=ON)")
+        if _env_get_bool("CPUINFER_USE_ASCEND", False):
+            cmake_args.append("-DKTRANSFORMERS_USE_ASCEND=ON")
+            if os.environ.get("ASCEND_HOME_PATH"):
+                cmake_args.append(f"-DASCEND_HOME_PATH={os.environ['ASCEND_HOME_PATH']}")
+            print("-- Enabling Ascend Runtime bridge (-DKTRANSFORMERS_USE_ASCEND=ON)")
 
         # Respect user extra CMAKE_ARGS (space separated)
         extra = os.environ.get("CMAKE_ARGS")

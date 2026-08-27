@@ -17,7 +17,9 @@ option(KTRANSFORMERS_USE_CUDA "ktransformers: use CUDA" OFF)
 option(KTRANSFORMERS_USE_MUSA "ktransformers: use MUSA" OFF)
 option(KTRANSFORMERS_USE_ROCM "ktransformers: use ROCM" OFF)
 option(KTRANSFORMERS_USE_MACA "ktransformers: use MACA" OFF)
+option(KTRANSFORMERS_USE_ASCEND "ktransformers: use Ascend CANN Runtime callbacks" OFF)
 option(KTRANSFORMERS_USE_SYCL "ktransformers: use SYCL GPTQ INT4 MoE" OFF)
+set(ASCEND_HOME_PATH "" CACHE PATH "Ascend CANN toolkit root containing acl/acl_rt.h and libacl_rt")
 option(KTRANSFORMERS_CUDA_STATIC_RUNTIME "ktransformers: statically link CUDA runtime" ON)
 option(KTRANSFORMERS_CPU_USE_KML "ktransformers: CPU use KML" OFF)
 option(KTRANSFORMERS_CPU_USE_AMX_AVX512 "ktransformers: CPU use AMX or AVX512" OFF)
@@ -38,13 +40,14 @@ foreach(_KT_GPU_BACKEND IN ITEMS
         KTRANSFORMERS_USE_SYCL
         KTRANSFORMERS_USE_ROCM
         KTRANSFORMERS_USE_MUSA
-        KTRANSFORMERS_USE_MACA)
+        KTRANSFORMERS_USE_MACA
+        KTRANSFORMERS_USE_ASCEND)
     if(${_KT_GPU_BACKEND})
         math(EXPR _KT_GPU_BACKEND_COUNT "${_KT_GPU_BACKEND_COUNT} + 1")
     endif()
 endforeach()
 if(_KT_GPU_BACKEND_COUNT GREATER 1)
-    message(FATAL_ERROR "CUDA, SYCL, ROCm, MUSA, and MACA backends are mutually exclusive")
+    message(FATAL_ERROR "CUDA, SYCL, ROCm, MUSA, MACA, and Ascend backends are mutually exclusive")
 endif()
 
 # Choose compilers BEFORE project() so CMake honors them
@@ -560,6 +563,27 @@ elseif(KTRANSFORMERS_USE_MACA)
     message(STATUS "MACA BLAS: ${MACA_BLAS_LIBRARY}")
     include_directories(${MACA_INCLUDE_DIR})
     add_compile_definitions(KTRANSFORMERS_USE_MACA=1)
+elseif(KTRANSFORMERS_USE_ASCEND)
+    if(NOT ASCEND_HOME_PATH AND DEFINED ENV{ASCEND_HOME_PATH})
+        set(ASCEND_HOME_PATH "$ENV{ASCEND_HOME_PATH}")
+    endif()
+    find_path(ASCEND_ACL_INCLUDE_DIR
+        NAMES acl/acl_rt.h
+        HINTS "${ASCEND_HOME_PATH}"
+        PATH_SUFFIXES include aarch64-linux/include
+    )
+    find_library(ASCEND_ACL_RUNTIME_LIBRARY
+        NAMES acl_rt
+        HINTS "${ASCEND_HOME_PATH}"
+        PATH_SUFFIXES lib lib64 aarch64-linux/lib64
+    )
+    if(NOT ASCEND_ACL_INCLUDE_DIR OR NOT ASCEND_ACL_RUNTIME_LIBRARY)
+        message(FATAL_ERROR "KTRANSFORMERS_USE_ASCEND=ON but acl/acl_rt.h or libacl_rt was not found. Set ASCEND_HOME_PATH to the CANN toolkit root.")
+    endif()
+    message(STATUS "Ascend CANN include: ${ASCEND_ACL_INCLUDE_DIR}")
+    message(STATUS "Ascend CANN runtime: ${ASCEND_ACL_RUNTIME_LIBRARY}")
+    include_directories(${ASCEND_ACL_INCLUDE_DIR})
+    add_compile_definitions(KTRANSFORMERS_USE_ASCEND=1)
 elseif(KTRANSFORMERS_USE_SYCL)
     message(STATUS "SYCL GPTQ INT4 support enabled")
 elseif(KTRANSFORMERS_CPU_USE_KML)
@@ -856,6 +880,10 @@ if(KTRANSFORMERS_USE_MACA)
     add_compile_definitions(USE_MACA=1)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${MACA_RUNTIME_LIBRARY} ${MACA_BLAS_LIBRARY})
     message(STATUS "Building for MACA")
+endif()
+if(KTRANSFORMERS_USE_ASCEND)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${ASCEND_ACL_RUNTIME_LIBRARY})
+    message(STATUS "Building Ascend Runtime callback bridge")
 endif()
 
 
