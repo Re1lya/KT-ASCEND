@@ -75,6 +75,7 @@ static const bool _is_plain_ = false;
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <type_traits>
 
 #include "operators/kvcache/kvcache.h"
@@ -109,10 +110,20 @@ class CPUInferTestTask : public std::enable_shared_from_this<CPUInferTestTask> {
     });
   }
 
+  static void fail_in_callback(void* opaque) {
+    std::unique_ptr<Args> args(static_cast<Args*>(opaque));
+    throw std::runtime_error("intentional CPUInfer host callback failure");
+  }
+
   std::pair<intptr_t, intptr_t> task(int sleep_ms) {
     if (sleep_ms < 0) throw std::invalid_argument("sleep_ms must be non-negative");
     auto* args = new Args{nullptr, shared_from_this(), sleep_ms};
     return {reinterpret_cast<intptr_t>(&submit), reinterpret_cast<intptr_t>(args)};
+  }
+
+  std::pair<intptr_t, intptr_t> failing_callback_task() {
+    auto* args = new Args{nullptr, shared_from_this(), 0};
+    return {reinterpret_cast<intptr_t>(&fail_in_callback), reinterpret_cast<intptr_t>(args)};
   }
 
   int64_t start_ns() const { return start_ns_.load(std::memory_order_acquire); }
@@ -231,7 +242,7 @@ class MOEBindings {
       TP_MOE<T>* moe;
     };
     static void inner(void* args) {
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       args_->cpuinfer->enqueue(&TP_MOE<T>::warm_up, args_->moe);
     }
     static std::pair<intptr_t, intptr_t> cpuinfer_interface(std::shared_ptr<TP_MOE<T>> moe) {
@@ -246,7 +257,7 @@ class MOEBindings {
       TP_MOE<T>* moe;
     };
     static void inner(void* args) {
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       args_->cpuinfer->enqueue(&TP_MOE<T>::load_weights, args_->moe);
     }
     static std::pair<intptr_t, intptr_t> cpuinfer_interface(std::shared_ptr<TP_MOE<T>> moe,
@@ -278,7 +289,7 @@ class MOEBindings {
       bool incremental;
     };
     static void inner(void* args) {
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       args_->cpuinfer->enqueue(&TP_MOE<T>::forward_binding, args_->moe, args_->qlen, args_->k, args_->expert_ids,
                                args_->weights, args_->input, args_->output, args_->incremental);
     }
@@ -307,7 +318,7 @@ class MOESFTBindings {
       TP_MOE_SFT<T>* moe;
     };
     static void inner(void* args) {
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       args_->cpuinfer->enqueue(&TP_MOE_SFT<T>::warm_up, args_->moe);
     }
     static std::pair<intptr_t, intptr_t> cpuinfer_interface(std::shared_ptr<TP_MOE_SFT<T>> moe) {
@@ -323,7 +334,7 @@ class MOESFTBindings {
       TP_MOE_SFT<T>* moe;
     };
     static void inner(void* args) {
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       args_->cpuinfer->enqueue(&TP_MOE_SFT<T>::load_weights, args_->moe);
     }
     static std::pair<intptr_t, intptr_t> cpuinfer_interface(std::shared_ptr<TP_MOE_SFT<T>> moe) {
@@ -346,7 +357,7 @@ class MOESFTBindings {
       bool save_for_backward;
     };
     static void inner(void* args) {
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       args_->cpuinfer->enqueue(&TP_MOE_SFT<T>::forward_sft_binding, args_->moe, args_->qlen, args_->k,
                                args_->expert_ids, args_->weights, args_->input, args_->output,
                                args_->save_for_backward);
@@ -380,7 +391,7 @@ class MOESFTBindings {
       float optimizer_grad_scale;
     };
     static void inner(void* args) {
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       args_->cpuinfer->enqueue(&TP_MOE_SFT<T>::backward_binding, args_->moe, args_->grad_output, args_->grad_input,
                                args_->grad_gate_lora_a, args_->grad_gate_lora_b, args_->grad_up_lora_a,
                                args_->grad_up_lora_b, args_->grad_down_lora_a, args_->grad_down_lora_b,
@@ -427,7 +438,7 @@ class MOESFTBindings {
     static void inner(void* args) {
       // Debug code for Bug #18 - commented out after fix verified
       // printf("[DEBUG UpdateLoRAWeightsBindings::inner] called\n");
-      Args* args_ = (Args*)args;
+      std::unique_ptr<Args> args_(static_cast<Args*>(args));
       // printf("  moe=%p, gate_lora_a=%p, gate_lora_b=%p\n", (void*)args_->moe, (void*)args_->gate_lora_a,
       // (void*)args_->gate_lora_b); printf("  up_lora_a=%p, up_lora_b=%p\n", (void*)args_->up_lora_a,
       // (void*)args_->up_lora_b); printf("  down_lora_a=%p, down_lora_b=%p\n", (void*)args_->down_lora_a,
@@ -531,7 +542,7 @@ void bind_moe_module(py::module_& moe_module, const char* name) {
       };
 
       static void inner(void* args) {
-        Args* args_ = (Args*)args;
+        std::unique_ptr<Args> args_(static_cast<Args*>(args));
         args_->cpuinfer->enqueue(&MoeClass::write_weight_scale_to_buffer, args_->moe, args_->gpu_tp_count,
                                  args_->expert_id, args_->w13_weight_ptrs, args_->w13_scale_ptrs, args_->w2_weight_ptrs,
                                  args_->w2_scale_ptrs);
@@ -604,6 +615,7 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
       .def(py::init<WorkerPoolConfig>())
       .def("submit", &CPUInfer::submit)
       .def("sync", &CPUInfer::sync, py::arg("allow_n_pending") = 0)
+      .def("rethrow_device_callback_error", &CPUInfer::rethrow_device_callback_error)
       .def("worker_pool_config", [](CPUInfer& self) { return self.backend_->config; })
       .def_readwrite("backend_", &CPUInfer::backend_)
 #if defined(KTRANSFORMERS_HAS_DEVICE_STREAM_CALLBACKS)
@@ -1120,6 +1132,7 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
   py::class_<CPUInferTestTask, std::shared_ptr<CPUInferTestTask>>(testing, "CPUInferTestTask")
       .def(py::init<>())
       .def("task", &CPUInferTestTask::task, py::arg("sleep_ms"))
+      .def("failing_callback_task", &CPUInferTestTask::failing_callback_task)
       .def_property_readonly("start_ns", &CPUInferTestTask::start_ns)
       .def_property_readonly("finish_ns", &CPUInferTestTask::finish_ns)
       .def_property_readonly("completions", &CPUInferTestTask::completions);
