@@ -138,3 +138,53 @@ def test_sequential_contributions_add_to_output_without_reweighting(tmp_path):
         rtol=0,
         atol=0,
     )
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        [0, 1, 2, 3],
+        [2, 0, 3, 1],
+        [3, 2, 1, 0],
+        [1, 3, 0, 2],
+    ],
+)
+def test_hybrid_physical_to_logical_mapping_matrix(tmp_path, mapping):
+    coordinator, weights, mapping_tensor = _coordinator(tmp_path, mapping)
+    hidden_cpu = torch.randn(4, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
+    ids_cpu = torch.tensor([[0, 2], [1, 3], [0, 1], [3, 2]], dtype=torch.int64)
+    route_weights_cpu = torch.tensor([[0.4, 0.6], [0.4, 0.6], [0.4, 0.6], [0.7, 0.3]])
+    result = coordinator.forward_sequential(
+        hidden_cpu.to("npu"), ids_cpu.to("npu"), route_weights_cpu.to("npu")
+    )
+    expected = _reference(hidden_cpu, ids_cpu, route_weights_cpu, weights, mapping_tensor)
+    _assert_numerical(result.output.cpu(), expected)
+
+
+@pytest.mark.parametrize("qlen", [1, 8, 32])
+def test_hybrid_decode_and_prefill_lengths(tmp_path, qlen):
+    coordinator, weights, mapping = _coordinator(tmp_path, [2, 0, 3, 1])
+    torch.manual_seed(tiny_fixture.SEED + qlen)
+    hidden_cpu = torch.randn(qlen, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
+    route_matrix = torch.tensor([[0, 2], [1, 3], [0, 1], [3, 2]], dtype=torch.int64)
+    ids_cpu = route_matrix[torch.arange(qlen).remainder(4)]
+    route_weights_cpu = torch.tensor([[0.4, 0.6]], dtype=torch.float32).repeat(qlen, 1)
+    result = coordinator.forward_sequential(
+        hidden_cpu.to("npu"), ids_cpu.to("npu"), route_weights_cpu.to("npu")
+    )
+    expected = _reference(hidden_cpu, ids_cpu, route_weights_cpu, weights, mapping)
+    assert result.output.shape == hidden_cpu.shape
+    _assert_numerical(result.output.cpu(), expected)
+
+
+@pytest.mark.parametrize("route_weights", [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5], [0.99, 0.01]])
+def test_hybrid_router_weight_edges_are_applied_once(tmp_path, route_weights):
+    coordinator, weights, mapping = _coordinator(tmp_path)
+    hidden_cpu = torch.randn(1, tiny_fixture.DEFAULT_HIDDEN_SIZE, dtype=torch.bfloat16)
+    ids_cpu = torch.tensor([[0, 1]], dtype=torch.int64)
+    route_weights_cpu = torch.tensor([route_weights], dtype=torch.float32)
+    result = coordinator.forward_sequential(
+        hidden_cpu.to("npu"), ids_cpu.to("npu"), route_weights_cpu.to("npu")
+    )
+    expected = _reference(hidden_cpu, ids_cpu, route_weights_cpu, weights, mapping)
+    _assert_numerical(result.output.cpu(), expected)
