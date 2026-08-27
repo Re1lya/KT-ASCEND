@@ -16,6 +16,8 @@
 #include <cpptrace/cpptrace.hpp>
 #endif
 #include <csignal>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 
@@ -84,6 +86,49 @@ static const bool _is_plain_ = false;
 
 namespace py = pybind11;
 using namespace pybind11::literals;
+
+class CPUInferTestTask : public std::enable_shared_from_this<CPUInferTestTask> {
+ public:
+  struct Args {
+    CPUInfer* cpuinfer;
+    std::shared_ptr<CPUInferTestTask> state;
+    int sleep_ms;
+  };
+
+  static void run(std::shared_ptr<CPUInferTestTask> state, int sleep_ms) {
+    state->start_ns_.store(now_ns(), std::memory_order_release);
+    std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+    state->finish_ns_.store(now_ns(), std::memory_order_release);
+    state->completions_.fetch_add(1, std::memory_order_release);
+  }
+
+  static void submit(void* opaque) {
+    std::unique_ptr<Args> args(static_cast<Args*>(opaque));
+    args->cpuinfer->task_queue_->enqueue([state = args->state, sleep_ms = args->sleep_ms]() {
+      CPUInferTestTask::run(std::move(state), sleep_ms);
+    });
+  }
+
+  std::pair<intptr_t, intptr_t> task(int sleep_ms) {
+    if (sleep_ms < 0) throw std::invalid_argument("sleep_ms must be non-negative");
+    auto* args = new Args{nullptr, shared_from_this(), sleep_ms};
+    return {reinterpret_cast<intptr_t>(&submit), reinterpret_cast<intptr_t>(args)};
+  }
+
+  int64_t start_ns() const { return start_ns_.load(std::memory_order_acquire); }
+  int64_t finish_ns() const { return finish_ns_.load(std::memory_order_acquire); }
+  int completions() const { return completions_.load(std::memory_order_acquire); }
+
+ private:
+  static int64_t now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
+
+  std::atomic<int64_t> start_ns_{0};
+  std::atomic<int64_t> finish_ns_{0};
+  std::atomic<int> completions_{0};
+};
 
 py::object to_float_ptr(uintptr_t input_ptr, int size, ggml_type type) {
   if (type < 0 || type >= GGML_TYPE_COUNT) {
@@ -1070,6 +1115,14 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
            [](KVCache& kvcache, int cache_total_len) { kvcache.update_cache_total_len(cache_total_len); });
 
   auto utils = m.def_submodule("utils");
+
+  auto testing = m.def_submodule("testing");
+  py::class_<CPUInferTestTask, std::shared_ptr<CPUInferTestTask>>(testing, "CPUInferTestTask")
+      .def(py::init<>())
+      .def("task", &CPUInferTestTask::task, py::arg("sleep_ms"))
+      .def_property_readonly("start_ns", &CPUInferTestTask::start_ns)
+      .def_property_readonly("finish_ns", &CPUInferTestTask::finish_ns)
+      .def_property_readonly("completions", &CPUInferTestTask::completions);
 
   // 注册转换函数
   utils.def("to_float", &to_float_ptr, "Convert tensor from any GGML type to float32", py::arg("input"),
