@@ -154,6 +154,7 @@ class _MoEBase:
     """
 
     _cpu_infer_instance = None
+    _cpu_infer_instances = {}
 
     @classmethod
     def _get_cpu_infer(
@@ -173,29 +174,55 @@ class _MoEBase:
         Returns:
             CPUInfer singleton instance
         """
-        if cls._cpu_infer_instance is None:
+        if numa_nodes is not None:
+            if len(numa_nodes) != threadpool_count:
+                raise ValueError(
+                    f"numa_nodes length ({len(numa_nodes)}) must match "
+                    f"threadpool_count ({threadpool_count})"
+                )
+            subpool_numa_map = list(numa_nodes)
+        else:
+            subpool_numa_map = list(range(threadpool_count))
+        subpool_thread_count = [
+            cpuinfer_threads // threadpool_count + (1 if i < cpuinfer_threads % threadpool_count else 0)
+            for i in range(threadpool_count)
+        ]
+        config_key = (tuple(subpool_numa_map), tuple(subpool_thread_count))
+
+        if config_key not in cls._cpu_infer_instances:
             worker_config = kt_kernel_ext.WorkerPoolConfig()
-
-            if numa_nodes is not None:
-                if len(numa_nodes) != threadpool_count:
-                    raise ValueError(
-                        f"numa_nodes length ({len(numa_nodes)}) must match "
-                        f"threadpool_count ({threadpool_count})"
-                    )
-                subpool_numa_map = list(numa_nodes)
-            else:
-                subpool_numa_map = list(range(threadpool_count))
-            subpool_thread_count = [
-                cpuinfer_threads // threadpool_count + (1 if i < cpuinfer_threads % threadpool_count else 0)
-                for i in range(threadpool_count)
-            ]
-
             worker_config.subpool_count = threadpool_count
             worker_config.subpool_numa_map = subpool_numa_map
             worker_config.subpool_thread_count = subpool_thread_count
-            cls._cpu_infer_instance = kt_kernel_ext.CPUInfer(worker_config)
+            cls._cpu_infer_instances[config_key] = kt_kernel_ext.CPUInfer(worker_config)
 
+        cls._cpu_infer_instance = cls._cpu_infer_instances[config_key]
         return cls._cpu_infer_instance
+
+    def cpu_runtime_diagnostics(self) -> dict:
+        """Return read-only worker-pool, affinity, and NUMA visibility data."""
+        config = self.cpu_infer.worker_pool_config()
+        try:
+            process_affinity = sorted(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            process_affinity = []
+
+        available_numa_nodes = []
+        try:
+            with open("/sys/devices/system/node/online", "r", encoding="utf-8") as file:
+                for part in file.read().strip().split(","):
+                    bounds = [int(value) for value in part.split("-")]
+                    available_numa_nodes.extend(range(bounds[0], bounds[-1] + 1))
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+
+        return {
+            "subpool_count": int(config.subpool_count),
+            "subpool_numa_map": list(config.subpool_numa_map),
+            "subpool_thread_count": list(config.subpool_thread_count),
+            "process_cpu_affinity": process_affinity,
+            "available_numa_nodes": available_numa_nodes,
+        }
 
     @staticmethod
     def _validate_base_config(
@@ -541,4 +568,3 @@ class BaseMoEWrapper(_MoEBase, ABC):
         KExpertsCPUBuffer.capture_buffers.clear()
         KExpertsCPUBuffer.temp_bs = 0
         KExpertsCPUBuffer.temp_buffer = tuple()
-
