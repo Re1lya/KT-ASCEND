@@ -305,6 +305,13 @@ class HybridMoECoordinator:
 
         self.cpu_wrapper.submit_forward(hidden_states, expert_ids, routing_weights, device_stream_handle)
         accelerator_output = self.accelerator_provider.forward(hidden_states, expert_ids, routing_weights)
-        cpu_output = self.cpu_wrapper.sync_forward(hidden_states, device_stream_handle).clone()
+        cpu_buffer_output = self.cpu_wrapper.sync_forward(hidden_states, device_stream_handle)
+        # ``sync_forward`` queues the pinned-host-to-device copy after its host
+        # callback.  Complete that transfer before cloning the shared static
+        # buffer; otherwise a backend using an internal copy stream may race the
+        # clone when several buffer sizes are exercised in one process.
+        self._synchronize(hidden_states.device)
+        cpu_output = cpu_buffer_output.clone()
         output = cpu_output + accelerator_output
+        self._synchronize(hidden_states.device)
         return HybridMoEResult(output, cpu_output, accelerator_output)
