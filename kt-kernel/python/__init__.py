@@ -61,7 +61,12 @@ kt_kernel_ext = _kt_kernel_ext
 # Import main API
 from .experts import KTMoEWrapper
 from .experts_base import generate_gpu_experts_masks
-from .hybrid_moe import FixedExpertPlacement
+from .hybrid_moe import (
+    FixedExpertPlacement,
+    HybridMoECoordinator,
+    HybridMoEResult,
+    TorchNPUExpertProvider,
+)
 
 def __getattr__(name):
     if name == "AMXSFTMoEWrapper":
@@ -108,6 +113,9 @@ __all__ = [
     "AMXSFTMoEWrapper",
     "generate_gpu_experts_masks",
     "FixedExpertPlacement",
+    "TorchNPUExpertProvider",
+    "HybridMoECoordinator",
+    "HybridMoEResult",
     "kt_kernel_ext",
     "__cpu_variant__",
     "get_current_device_stream_handle",
