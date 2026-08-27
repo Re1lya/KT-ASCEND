@@ -65,7 +65,11 @@ if TYPE_CHECKING:
     from sglang.srt.server_args import ServerArgs
 
 try:
-    from kt_kernel import KTMoEWrapper, generate_gpu_experts_masks
+    from kt_kernel import (
+        KTMoEWrapper,
+        generate_gpu_experts_masks,
+        get_current_device_stream_handle,
+    )
 
     KTRANSFORMERS_AVAILABLE = True
 except ImportError:
@@ -3570,7 +3574,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         )
         self.gpu_index_to_logical = gpu_expert_indices.to(torch.int32)
 
-        # CUDA tensors for inference (will be set in create_weights)
+        # Accelerator tensors for inference (will be set in create_weights)
         self.gpu_experts_mask_cuda = None
         self.logical_to_gpu_index_cuda = None
 
@@ -3579,9 +3583,9 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         self.wrapper: Optional[KTMoEWrapper] = None
 
         # Dual-stream parallelism: cpu_stream for CPU expert operations,
-        # main stream for GPU computation (initialized in create_weights)
-        self._cpu_stream: Optional[torch.cuda.Stream] = None
-        self._sync_done_event: Optional[torch.cuda.Event] = None  # CPU computation done
+        # main stream for accelerator computation (initialized in create_weights)
+        self._cpu_stream = None
+        self._sync_done_event = None  # CPU computation done
 
         # Shared staging buffer reference (initialized in create_weights, shared across all layers)
         self._shared_staging_buffer: Optional[SharedStagingBuffer] = None
@@ -3649,8 +3653,9 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
 
         # Initialize dual-stream for CPU-GPU parallelism (rank 0 only)
         if self.tp_rank == 0:
-            self._cpu_stream = torch.cuda.Stream(device=target_device)
-            self._sync_done_event = torch.cuda.Event()
+            device_module = torch.get_device_module(target_device)
+            self._cpu_stream = device_module.Stream(device=target_device)
+            self._sync_done_event = device_module.Event()
 
             # Get or create shared staging buffer (shared across all MoE layers to save GPU memory)
             self._shared_staging_buffer = get_or_create_shared_staging_buffer(
@@ -3745,7 +3750,8 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
 
         # 2. Load CPU weights using KT wrapper
         if self.tp_rank == 0 and self.wrapper is not None:
-            torch.cuda.synchronize()
+            target_device = next(layer.parameters()).device
+            torch.get_device_module(target_device).synchronize()
 
             # Get expert location metadata for CPU expert mapping
             from sglang.srt.eplb.expert_location_dispatch import (
@@ -3847,29 +3853,31 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         topk_ids: torch.Tensor,
         topk_weights: torch.Tensor,
     ) -> None:
+        stream_handle = get_current_device_stream_handle(hidden_states.device.type)
         if self.kt_expert_lora_enabled:
             self.wrapper.submit_forward_inference(
                 hidden_states,
                 topk_ids,
                 topk_weights,
-                torch.cuda.current_stream(hidden_states.device).cuda_stream,
+                stream_handle,
             )
         else:
             self.wrapper.submit_forward(
                 hidden_states,
                 topk_ids,
                 topk_weights,
-                torch.cuda.current_stream(hidden_states.device).cuda_stream,
+                stream_handle,
             )
 
     def _sync_cpu_forward(self, ref_tensor: torch.Tensor) -> torch.Tensor:
+        stream_handle = get_current_device_stream_handle(ref_tensor.device.type)
         if self.kt_expert_lora_enabled:
             return self.wrapper.sync_forward_inference(
-                torch.cuda.current_stream(ref_tensor.device).cuda_stream,
+                stream_handle,
             )
         return self.wrapper.sync_forward(
             ref_tensor,
-            torch.cuda.current_stream(ref_tensor.device).cuda_stream,
+            stream_handle,
         )
 
     def submit(
@@ -3988,6 +3996,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
             )
 
         x = dispatch_output.hidden_states
+        device_module = torch.get_device_module(x.device)
         topk_output = dispatch_output.topk_output
         num_tokens = int(x.shape[0]) if x.dim() > 0 else 0
         _kt_timing = (
@@ -4151,20 +4160,30 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         # Staging buffer allows GPU computation to proceed without waiting for D2H copy
         staging_buffer = None
         if self.tp_rank == 0 and self._cpu_stream is not None:
-            # Use shared staging buffer (shared across all MoE layers to save GPU memory)
-            assert self._shared_staging_buffer is not None, "Shared staging buffer not initialized"
-            staging_buffer = self._shared_staging_buffer.get_slice(x.shape[0])
+            if x.device.type == "npu":
+                staging_buffer = x
+            else:
+                # Use shared staging buffer (shared across all MoE layers to save GPU memory)
+                assert self._shared_staging_buffer is not None, "Shared staging buffer not initialized"
+                staging_buffer = self._shared_staging_buffer.get_slice(x.shape[0])
 
-            # Copy to staging buffer on main stream
-            staging_buffer.copy_(x, non_blocking=True)
+                # Copy to staging buffer on main stream
+                staging_buffer.copy_(x, non_blocking=True)
 
             # SGLANG_KT_HYBRID_NO_CPU_STREAM=1 collapses cpu_stream onto main stream.
-            _no_cpu_stream = os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
+            _no_cpu_stream = (
+                os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
+                or x.device.type == "npu"
+            )
             if not _no_cpu_stream:
                 # Fork to cpu_stream (waits for staging copy to complete)
-                self._cpu_stream.wait_stream(torch.cuda.current_stream(x.device))
+                self._cpu_stream.wait_stream(device_module.current_stream(x.device))
             from contextlib import nullcontext as _ctx_null
-            _stream_ctx = _ctx_null() if _no_cpu_stream else torch.cuda.stream(self._cpu_stream)
+            _stream_ctx = (
+                _ctx_null()
+                if _no_cpu_stream
+                else device_module.stream(self._cpu_stream)
+            )
             with _stream_ctx:
                 # Submit uses staging_buffer, so GPU can modify original x freely
                 self._submit_with_staged_input(
@@ -4172,7 +4191,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
                 )
         if _kt_timing:
             if os.environ.get("SGLANG_KT_HYBRID_TIMING_DEEP") == "1":
-                torch.cuda.synchronize(x.device)
+                device_module.synchronize(x.device)
             _kt_t_after_submit = time.perf_counter()
 
         # Step 2: Prepare GPU computation by masking and remapping expert IDs
@@ -4189,7 +4208,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         )
         if _kt_timing:
             if os.environ.get("SGLANG_KT_HYBRID_TIMING_DEEP") == "1":
-                torch.cuda.synchronize(x.device)
+                device_module.synchronize(x.device)
             _kt_t_after_mask = time.perf_counter()
 
         # Step 3: Execute GPU expert computation on main stream
@@ -4242,18 +4261,31 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
             output = gpu_combine_input.hidden_states
         if _kt_timing:
             if os.environ.get("SGLANG_KT_HYBRID_TIMING_DEEP") == "1":
-                torch.cuda.synchronize(x.device)
+                device_module.synchronize(x.device)
             _kt_t_after_gpu = time.perf_counter()
 
         # Step 4: Sync CPU results on cpu_stream, then synchronize streams
         if self.tp_rank == 0 and self._cpu_stream is not None:
-            _no_cpu_stream = os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
+            _no_cpu_stream = (
+                os.environ.get("SGLANG_KT_HYBRID_NO_CPU_STREAM") == "1"
+                or x.device.type == "npu"
+            )
             from contextlib import nullcontext as _ctx_null
-            _stream_ctx = _ctx_null() if _no_cpu_stream else torch.cuda.stream(self._cpu_stream)
+            _stream_ctx = (
+                _ctx_null()
+                if _no_cpu_stream
+                else device_module.stream(self._cpu_stream)
+            )
             with _stream_ctx:
                 # Use staging_buffer for sync to get correct buffer reference
                 _kt_t_sync_pre = time.perf_counter() if _kt_t_apply_start is not None else None
                 cpu_output = self._sync_with_staged_input(staging_buffer)
+                if x.device.type == "npu":
+                    # CPUInfer's H2D may use an internal copy stream.  Match the
+                    # verified kt-kernel HybridMoECoordinator contract and make
+                    # that transfer complete before consuming its shared buffer.
+                    device_module.synchronize(x.device)
+                    cpu_output = cpu_output.clone()
                 if _kt_t_sync_pre is not None:
                     _kt_t_cpu_wait_ms = (time.perf_counter() - _kt_t_sync_pre) * 1000.0
                 if not _no_cpu_stream:
@@ -4263,7 +4295,9 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
 
             # Main stream waits for cpu_stream to complete before merging results
             if not _no_cpu_stream:
-                torch.cuda.current_stream(x.device).wait_event(self._sync_done_event)
+                device_module.current_stream(x.device).wait_event(
+                    self._sync_done_event
+                )
             output = output + cpu_output
         if _kt_timing:
             _kt_t_after_merge = time.perf_counter()
@@ -4273,7 +4307,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
             # serialises streams so per-stage numbers reflect GPU work, not
             # async launch return.
             if os.environ.get("SGLANG_KT_HYBRID_TIMING_DEEP") == "1":
-                torch.cuda.synchronize(x.device)
+                device_module.synchronize(x.device)
                 _kt_t_after_merge = time.perf_counter()
 
         if _kt_t_apply_start is not None:
