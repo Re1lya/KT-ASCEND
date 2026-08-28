@@ -51,4 +51,3 @@ count invariants are frozen correctness requirements.
 - NPU 0 at preflight: no running process
 - Container workload at preflight: `sleep infinity` only
 - Host/business containers: not stopped, restarted, reconfigured or modified
-

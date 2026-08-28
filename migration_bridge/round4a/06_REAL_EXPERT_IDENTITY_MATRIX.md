@@ -13,4 +13,3 @@ identity comparison; E6/E25/E36 used five CPU repeats and the E8 anchor used ten
 All outputs were finite and every repeat maximum absolute difference was zero.
 All four experts pass both hard gates (`5e-4` and `1e-2`). P2/P3 identities were
 not run after the ordered P1 stop.
-

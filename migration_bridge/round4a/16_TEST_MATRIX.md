@@ -17,4 +17,3 @@
 | CPU hit coverage | anchor hit | 4/4, 1,233 | NOT RUN | NOT RUN |
 
 Ordered execution stopped at P1 as required.
-

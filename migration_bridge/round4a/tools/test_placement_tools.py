@@ -93,4 +93,3 @@ def test_validator_rejects_cpu_npu_overlap_encoding() -> None:
         assert "CPU IDs" in str(error)
     else:
         raise AssertionError("invalid placement unexpectedly passed")
-

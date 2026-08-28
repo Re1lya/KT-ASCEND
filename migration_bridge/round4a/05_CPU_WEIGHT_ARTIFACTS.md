@@ -12,4 +12,3 @@ manifest containing the model revision, config/index hashes, source shard and
 tensor hashes, shapes, exporter hash and GGUF hash. P2/P3 artifacts were not
 generated because P1 failed its mandatory full-model gate; proceeding would
 violate the ordered stop rule.
-

@@ -21,4 +21,3 @@
 
 P1 is therefore blocked by mandatory token and logprob gates. P2/P3 A/B
 matrices were not run.
-

@@ -209,4 +209,3 @@ def validate_profile(
         "mask_dtype": str(gpu_mask.dtype),
         "mask_shape": list(gpu_mask.shape),
     }
-
