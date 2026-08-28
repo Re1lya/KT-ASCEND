@@ -223,6 +223,13 @@ class LLAMA_MOE_TP {
       if (logical_id < 0 || logical_id >= config.expert_num) {
         throw std::runtime_error("physical_to_logical_map contains an out-of-range logical expert ID");
       }
+      // The source GGUF keeps every physical expert, while this CPU backend
+      // owns only experts whose accelerator mask is false.  Avoid touching
+      // accelerator-owned slots so sparse hybrid placement does not fault the
+      // entire virtual allocation into host memory.
+      if (config.should_skip_expert(logical_id)) {
+        continue;
+      }
       auto* local_gate_proj = m_local_gate_proj_ +
                               logical_id * config.intermediate_size * config.hidden_size * gate_element_size /
                                   gate_block_size;
