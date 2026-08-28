@@ -431,6 +431,55 @@ class BaseMoEWrapper(_MoEBase, ABC):
         flat_hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         batch_size = flat_hidden_states.shape[0]
 
+        if hidden_states.device.type == "npu" and self.max_deferred_experts_per_token == 0:
+            if getattr(self, "_npu_pending_forward", None) is not None:
+                raise RuntimeError("an Ascend CPU expert forward is already pending on this wrapper")
+            # A raw pointer consumer cannot participate in torch_npu's internal
+            # copy-stream dependency tracking.  Use CANN's synchronous memcpy
+            # and own the host tensors for the complete CPUInfer lifetime.
+            import acl
+
+            input_npu = flat_hidden_states.to(dtype=torch.bfloat16).contiguous()
+            ids_npu = topk_ids.to(dtype=torch.int64).contiguous()
+            weights_npu = topk_weights.to(dtype=torch.float32).contiguous()
+            status = acl.rt.synchronize_stream(cuda_stream)
+            if status != 0:
+                raise RuntimeError(f"acl.rt.synchronize_stream failed with status {status}")
+            input_cpu = torch.empty_like(input_npu, device="cpu", pin_memory=True)
+            ids_cpu = torch.empty_like(ids_npu, device="cpu", pin_memory=True)
+            weights_cpu = torch.empty_like(weights_npu, device="cpu", pin_memory=True)
+            for destination, source in (
+                (input_cpu, input_npu),
+                (ids_cpu, ids_npu),
+                (weights_cpu, weights_npu),
+            ):
+                byte_count = destination.numel() * destination.element_size()
+                status = acl.rt.memcpy(
+                    destination.data_ptr(),
+                    byte_count,
+                    source.data_ptr(),
+                    byte_count,
+                    2,  # ACL_MEMCPY_DEVICE_TO_HOST
+                )
+                if status != 0:
+                    raise RuntimeError(f"acl.rt.memcpy D2H failed with status {status}")
+            output_cpu = torch.zeros_like(input_cpu)
+            batch_cpu = torch.tensor([batch_size], dtype=torch.int32, device="cpu")
+            incremental = BaseMoEWrapper._layer_has_pending_deferred.get(self.layer_idx - 1, False)
+            task = self.moe.forward_task(
+                batch_cpu.data_ptr(),
+                ids_cpu.size(-1),
+                ids_cpu.data_ptr(),
+                weights_cpu.data_ptr(),
+                input_cpu.data_ptr(),
+                output_cpu.data_ptr(),
+                incremental,
+            )
+            self._npu_pending_forward = (input_cpu, ids_cpu, weights_cpu, output_cpu, batch_cpu)
+            self.cpu_infer.submit(task)
+            BaseMoEWrapper._layer_has_pending_deferred[self.layer_idx] = False
+            return
+
         (
             input_tensor_cpu,
             immediate_experts_ids_cpu,
@@ -503,6 +552,28 @@ class BaseMoEWrapper(_MoEBase, ABC):
         Returns:
             output_gpu: Output tensor on GPU
         """
+        if hidden_states.device.type == "npu" and self.max_deferred_experts_per_token == 0:
+            pending = getattr(self, "_npu_pending_forward", None)
+            if pending is None:
+                raise RuntimeError("no Ascend CPU expert forward is pending on this wrapper")
+            self.cpu_infer.sync()
+            output_cpu = pending[3]
+            output_npu = torch.empty_like(hidden_states)
+            byte_count = output_cpu.numel() * output_cpu.element_size()
+            import acl
+
+            status = acl.rt.memcpy(
+                output_npu.data_ptr(),
+                byte_count,
+                output_cpu.data_ptr(),
+                byte_count,
+                1,  # ACL_MEMCPY_HOST_TO_DEVICE
+            )
+            if status != 0:
+                raise RuntimeError(f"acl.rt.memcpy H2D failed with status {status}")
+            self._npu_pending_forward = None
+            return output_npu.view_as(hidden_states)
+
         flat_hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         (
             _input_tensor_cpu,

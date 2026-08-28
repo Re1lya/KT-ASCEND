@@ -96,6 +96,21 @@ def test_overlapped_hybrid_matches_sequential(tmp_path, qlen):
     )
 
 
+def test_decode_overlapped_hybrid_is_repeatable(tmp_path):
+    coordinator = _coordinator(tmp_path)
+    hidden, expert_ids, routing_weights = _inputs(1)
+    expected = coordinator.forward_sequential(hidden, expert_ids, routing_weights)
+    for _ in range(20):
+        actual = coordinator.forward_overlapped(
+            hidden,
+            expert_ids,
+            routing_weights,
+            get_current_device_stream_handle("npu"),
+        )
+        torch.testing.assert_close(actual.output, expected.output, rtol=0, atol=0)
+        torch.testing.assert_close(actual.cpu_contribution, expected.cpu_contribution, rtol=0, atol=0)
+
+
 def test_real_cpu_and_npu_expert_intervals_overlap(tmp_path):
     coordinator = _coordinator(tmp_path)
     hidden, expert_ids, routing_weights = _inputs(256)
