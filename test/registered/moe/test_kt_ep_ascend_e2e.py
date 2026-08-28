@@ -27,6 +27,7 @@ from sglang.srt.layers.moe.token_dispatcher.standard import (
     StandardDispatchOutput,
 )
 from sglang.srt.layers.moe.topk import StandardTopKOutput
+from sglang.srt.layers.quantization.unquant import _sanitize_ascend_moe_routes
 
 
 PARENT_ROOT = Path(__file__).resolve().parents[5]
@@ -97,6 +98,26 @@ def test_llamafile_expert_mapping_is_int32_at_load_boundary(monkeypatch):
     assert loaded_mappings[0].dtype == torch.int32
     assert loaded_mappings[0].is_contiguous()
     assert loaded_mappings[0].tolist() == [4, 5, 6, 7]
+
+
+def test_ascend_routes_disable_cpu_owned_experts():
+    route_ids = torch.tensor([[4, -1], [-1, 2]], dtype=torch.int64, device="npu")
+    route_weights = torch.tensor(
+        [[0.25, 0.75], [0.6, 0.4]], dtype=torch.float32, device="npu"
+    )
+
+    sanitized_ids, sanitized_weights = _sanitize_ascend_moe_routes(
+        route_ids, route_weights
+    )
+
+    assert sanitized_ids.dtype == torch.int32
+    assert sanitized_ids.cpu().tolist() == [[4, 0], [0, 2]]
+    torch.testing.assert_close(
+        sanitized_weights.cpu(),
+        torch.tensor([[0.25, 0.0], [0.0, 0.4]], dtype=torch.float32),
+        rtol=0,
+        atol=0,
+    )
 
 
 class _TorchNPUExpertMethod:

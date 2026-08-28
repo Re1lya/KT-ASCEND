@@ -152,6 +152,15 @@ class UnquantizedLinearMethod(LinearMethodBase):
         return F.linear(x, layer.weight, bias)
 
 
+def _sanitize_ascend_moe_routes(topk_ids, topk_weights):
+    """Disable KT CPU routes while keeping Ascend route IDs in range."""
+    valid_routes = topk_ids >= 0
+    return (
+        topk_ids.clamp_min(0).to(torch.int32),
+        topk_weights * valid_routes.to(topk_weights.dtype),
+    )
+
+
 class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
     """MoE method without quantization."""
 
@@ -554,7 +563,14 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
         original_dtype = x.dtype
         num_tokens = x.shape[0]
         topk_weights = topk_weights.to(x.dtype)
-        topk_ids = topk_ids.to(torch.int32)
+        # KT marks CPU-owned routes with expert ID -1.  Ascend's routing ops
+        # require every active ID to be in the physical accelerator expert
+        # range; feeding -1 produces undefined routing/finalization results.
+        # Keep the route mathematically disabled by zeroing its scale and use
+        # physical expert 0 only as a valid placeholder for the NPU kernels.
+        topk_ids, topk_weights = _sanitize_ascend_moe_routes(
+            topk_ids, topk_weights
+        )
         # The routed IDs passed by KT are physical accelerator-local IDs.  A
         # hybrid layer can therefore own fewer accelerator weights than its
         # logical expert count (for example, 63 of 64 experts).  Ascend's
