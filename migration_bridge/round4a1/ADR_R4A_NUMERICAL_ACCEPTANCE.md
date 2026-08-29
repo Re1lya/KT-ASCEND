@@ -2,8 +2,8 @@
 
 ## Status
 
-`FINAL — BLOCKED_REQUIRES_ACCEPTANCE_DECISION`. P1 remains blocked and P2/P3
-are not allowed under the frozen acceptance contract.
+`FINAL — BACKEND_OPTIONS_EXHAUSTED — REQUIRES_ACCEPTANCE_DECISION`. P1 remains
+blocked and P2/P3 are not allowed under the frozen acceptance contract.
 
 ## Context
 
@@ -40,6 +40,28 @@ not a fixed bad expert or routing error.
   KML/BLAS or another CPU GEMM implementation in the disposable container. It
   must demonstrate the full 45/45 gate and preserve performance/ownership
   constraints; low stagewise rel-L2 alone is insufficient.
+
+## Round 4A.2 backend investigation result
+
+Round 4A.2 evaluated the current LLAMAFILE path, the non-buildable repository
+KML references, OpenBLAS, BLIS, ATLAS, and Arm Compute Library NEGEMM using
+identical captured operands and ten-repeat deterministic probes. BLIS, ATLAS,
+and ACL failed the stagewise numerical/runtime gates. OpenBLAS alone restored
+the original `v_struct_03` margin from `0` to the All-NPU value `+0.125` and
+passed controlled local integration, but it changed a second exact All-NPU tie
+for `v_en_01` from margin `0` to `-0.125`. Full P1 therefore remained 42/45,
+with the repeated failure trajectory moving from `v_struct_03` to `v_en_01`.
+
+The OpenBLAS adapter was removed and the final production diff is zero. This
+closes the authorized maintainable backend search without relaxing any gate:
+
+```text
+ROUND4A2_CPU_BACKEND_NUMERICAL_INVESTIGATION = COMPLETE
+BACKEND_OPTIONS_EXHAUSTED = TRUE
+P1 = BLOCKED
+P2 = NOT_RUN
+P3 = NOT_RUN
+```
 
 ## Rejected alternatives
 
