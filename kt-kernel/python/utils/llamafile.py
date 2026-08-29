@@ -158,6 +158,7 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
         )
 
         self.weights_to_keep = None
+        self.output_dtype = torch.float32
 
     def load_weights_from_tensors(
         self,
@@ -255,6 +256,11 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
         moe_config.up_type = up_type
         moe_config.down_type = down_type
         moe_config.hidden_type = hidden_type
+        moe_config.output_type = ggml_type.FP32
+        # Ascend's unquantized MoE exposes BF16 boundaries after gate/up GMM,
+        # fused SwiGLU, and down GMM. Keep llamafile's F32 accumulation while
+        # matching those values at the CPU/NPU merge boundary.
+        moe_config.bf16_numerical_compat = True
 
         # Create MoE module
         self.moe = MOE(moe_config)
@@ -294,7 +300,11 @@ class LlamafileMoEWrapper(BaseMoEWrapper):
             )
 
         qlen = torch.tensor([token_count], dtype=torch.int32, device="cpu")
-        output = torch.empty_like(flat_hidden_states)
+        output = torch.empty(
+            flat_hidden_states.shape,
+            dtype=self.output_dtype,
+            device=flat_hidden_states.device,
+        )
         self.cpu_infer.submit(
             self.moe.forward_task(
                 qlen.data_ptr(),

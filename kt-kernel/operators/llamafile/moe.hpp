@@ -283,6 +283,10 @@ class LLAMA_MOE_TP {
 
   static float act_fn(float x) { return x / (1.0f + expf(-x)); }
 
+  static float round_to_bf16_value(float x) {
+    return ggml_bf16_to_fp32(ggml_fp32_to_bf16(x));
+  }
+
   void forward_one(int k, const int64_t* expert_ids, const float* weights, const void* input, float* output) {
     auto pool = config_.pool->get_subpool(tp_part_idx);
 #ifdef FORWARD_TIME_PROFILE
@@ -386,7 +390,15 @@ class LLAMA_MOE_TP {
                             GGML_PREC_DEFAULT);
 
             for (int i = ith * config_.m_block; i < (ith + 1) * config_.m_block; i++) {
-              s_intermediate_fp32_[act_idx][i] = act_fn(s_gate_output_[act_idx][i]) * s_up_output_[act_idx][i];
+              float gate = s_gate_output_[act_idx][i];
+              float up = s_up_output_[act_idx][i];
+              if (config_.bf16_numerical_compat) {
+                gate = round_to_bf16_value(gate);
+                up = round_to_bf16_value(up);
+              }
+              float intermediate = act_fn(gate) * up;
+              s_intermediate_fp32_[act_idx][i] =
+                  config_.bf16_numerical_compat ? round_to_bf16_value(intermediate) : intermediate;
             }
             if (config_.m_block %
                     ggml_blck_size(ggml_internal_get_type_traits((ggml_type)config_.down_type).vec_dot_type) ==
@@ -456,9 +468,16 @@ class LLAMA_MOE_TP {
                 break;
               }
             }
+            if (config_.bf16_numerical_compat) {
+              expert_weight = round_to_bf16_value(expert_weight);
+            }
 
             for (int i = ith * config_.m_block; i < (ith + 1) * config_.m_block; i++) {
-              output[i] += s_down_output_[expert_idx][i] * expert_weight;
+              float down = s_down_output_[expert_idx][i];
+              if (config_.bf16_numerical_compat) {
+                down = round_to_bf16_value(down);
+              }
+              output[i] += down * expert_weight;
             }
           }
         },
@@ -658,9 +677,16 @@ class LLAMA_MOE_TP {
               ggml_internal_get_type_traits((ggml_type)config_.up_type).vec_dot_type, GGML_TYPE_F32, GGML_PREC_DEFAULT);
           for (int i = 0; i < m_local_num_[expert_idx]; i++) {
             for (int j = ith * m_block; j < (ith + 1) * m_block; j++) {
-              m_local_intermediate_fp32_ptr_[expert_idx][i * config_.intermediate_size + j] =
-                  act_fn(m_local_gate_output_ptr_[expert_idx][i * config_.intermediate_size + j]) *
-                  m_local_up_output_ptr_[expert_idx][i * config_.intermediate_size + j];
+              const int offset = i * config_.intermediate_size + j;
+              float gate = m_local_gate_output_ptr_[expert_idx][offset];
+              float up = m_local_up_output_ptr_[expert_idx][offset];
+              if (config_.bf16_numerical_compat) {
+                gate = round_to_bf16_value(gate);
+                up = round_to_bf16_value(up);
+              }
+              float intermediate = act_fn(gate) * up;
+              m_local_intermediate_fp32_ptr_[expert_idx][offset] =
+                  config_.bf16_numerical_compat ? round_to_bf16_value(intermediate) : intermediate;
             }
             float* intermediate_fp32_ptr =
                 m_local_intermediate_fp32_ptr_[expert_idx] + i * config_.intermediate_size + ith * m_block;
@@ -731,10 +757,17 @@ class LLAMA_MOE_TP {
             if (config_.should_skip_expert(expert_ids[i * k + j])) {
               continue;
             }
+            float expert_weight = weights[i * k + j];
+            if (config_.bf16_numerical_compat) {
+              expert_weight = round_to_bf16_value(expert_weight);
+            }
             for (int e = 0; e < config_.hidden_size; e++) {
-              m_output_fp32_[i][e] +=
-                  m_local_down_output_ptr_[expert_ids[i * k + j]][m_local_pos_[i][j] * config_.hidden_size + e] *
-                  weights[i * k + j];
+              float down = m_local_down_output_ptr_[expert_ids[i * k + j]]
+                                                    [m_local_pos_[i][j] * config_.hidden_size + e];
+              if (config_.bf16_numerical_compat) {
+                down = round_to_bf16_value(down);
+              }
+              m_output_fp32_[i][e] += down * expert_weight;
             }
           }
           for (int e = 0; e < config_.hidden_size; e++) {
@@ -806,13 +839,15 @@ class TP_MOE<LLAMA_MOE_TP> : public TP_MOE_Common<LLAMA_MOE_TP> {
 
   void merge_results(int qlen, void* output, bool incremental) {
     auto pool = this->config.pool;
+    const ggml_type output_type =
+        config.output_type >= 0 ? (ggml_type)config.output_type : (ggml_type)config.hidden_type;
     pool->do_work_stealing_job(
         qlen, nullptr,
-        [this, output, incremental](int token_nth) {
+        [this, output, incremental, output_type](int token_nth) {
           if (incremental) {
-            to_float((uint8_t*)output + token_nth * config.hidden_size * ggml_type_size((ggml_type)config.hidden_type) /
-                                            ggml_blck_size((ggml_type)config.hidden_type),
-                     local_output + token_nth * config.hidden_size, config.hidden_size, (ggml_type)config.hidden_type);
+            to_float((uint8_t*)output + token_nth * config.hidden_size * ggml_type_size(output_type) /
+                                            ggml_blck_size(output_type),
+                     local_output + token_nth * config.hidden_size, config.hidden_size, output_type);
             for (int e = 0; e < config.hidden_size; e++) {
               local_output_numa[0][token_nth * config.hidden_size + e] +=
                   local_output[token_nth * config.hidden_size + e];
@@ -826,9 +861,9 @@ class TP_MOE<LLAMA_MOE_TP> : public TP_MOE_Common<LLAMA_MOE_TP> {
             }
           }
           from_float(local_output_numa[0] + token_nth * config.hidden_size,
-                     (uint8_t*)output + token_nth * config.hidden_size * ggml_type_size((ggml_type)config.hidden_type) /
-                                            ggml_blck_size((ggml_type)config.hidden_type),
-                     config.hidden_size, (ggml_type)config.hidden_type);
+                     (uint8_t*)output + token_nth * config.hidden_size * ggml_type_size(output_type) /
+                                            ggml_blck_size(output_type),
+                     config.hidden_size, output_type);
         },
         nullptr);
   }
