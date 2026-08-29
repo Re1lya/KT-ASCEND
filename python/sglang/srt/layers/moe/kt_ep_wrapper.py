@@ -25,6 +25,14 @@ Diagnostic / escape-hatch environment variables (KT-DEBUG-ONLY; not for prod):
         Force GPU-experts apply() to a zero return; routed expert output
         comes purely from the CPU side. "Plan-C" fallback for diagnosing
         whether a regression sits in the GPU MoE path or the merge math.
+
+    SGLANG_KT_NUMERICAL_DUMP_DIR=/path/to/output
+        Dump the exact staged hidden states and routes seen by the CPU expert
+        boundary. Requires SGLANG_KT_NUMERICAL_DUMP_LAYERS (comma-separated)
+        and is capped by SGLANG_KT_NUMERICAL_DUMP_MAX_PASSES (default: 3) per
+        selected layer. If SGLANG_KT_NUMERICAL_DUMP_ARM_FILE is set, dumping
+        does not start until that sentinel file exists. This deliberately
+        synchronizes device-to-host copies.
 """
 
 import bisect
@@ -3596,6 +3604,8 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         self.gpu_prefill_token_threshold = kt_config.gpu_prefill_token_threshold or 0
         self._full_init_args = None
         self.wrapper: Optional[KTMoEWrapper] = None
+        self._numerical_dump_pass = 0
+        self._pending_numerical_dump_paths: List[Path] = []
 
         # Dual-stream parallelism: cpu_stream for CPU expert operations,
         # main stream for accelerator computation (initialized in create_weights)
@@ -3860,6 +3870,12 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
                 gpu_runner_config, num_local_experts=self.num_gpu_experts
             )
 
+        # LLAMAFILE keeps CPU and NPU partial route sums in FP32 so the hybrid
+        # merge has the same single final BF16 rounding as all-NPU finalize.
+        self.gpu_method._kt_return_fp32_contribution = (
+            (self.kt_config.method or "").upper() == "LLAMAFILE"
+        )
+
         # Delegate to GPU method to create its runner
         self.gpu_method.create_moe_runner(layer, gpu_runner_config)
 
@@ -3960,8 +3976,87 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         topk_output = dispatch_output.topk_output
         topk_weights, topk_ids, _ = topk_output
 
+        self._maybe_dump_numerical_inputs(
+            staged_hidden_states, topk_ids, topk_weights
+        )
+
         # Submit forward task using staged buffer
         self._submit_cpu_forward(staged_hidden_states, topk_ids, topk_weights)
+
+    def _maybe_dump_numerical_inputs(
+        self,
+        hidden_states: torch.Tensor,
+        topk_ids: torch.Tensor,
+        topk_weights: torch.Tensor,
+    ) -> None:
+        """Dump exact CPU-boundary inputs when explicitly enabled for triage."""
+        dump_dir = os.environ.get("SGLANG_KT_NUMERICAL_DUMP_DIR")
+        if not dump_dir:
+            return
+        arm_file = os.environ.get("SGLANG_KT_NUMERICAL_DUMP_ARM_FILE")
+        if arm_file and not Path(arm_file).is_file():
+            return
+        raw_layers = os.environ.get("SGLANG_KT_NUMERICAL_DUMP_LAYERS")
+        if not raw_layers:
+            raise RuntimeError(
+                "SGLANG_KT_NUMERICAL_DUMP_LAYERS is required when numerical "
+                "dumping is enabled"
+            )
+        try:
+            selected_layers = {
+                int(value.strip())
+                for value in raw_layers.split(",")
+                if value.strip()
+            }
+            max_passes = int(
+                os.environ.get("SGLANG_KT_NUMERICAL_DUMP_MAX_PASSES", "3")
+            )
+        except ValueError as error:
+            raise RuntimeError("invalid KT numerical dump configuration") from error
+        if max_passes <= 0:
+            raise RuntimeError(
+                "SGLANG_KT_NUMERICAL_DUMP_MAX_PASSES must be positive"
+            )
+        layer_idx = int(self.kt_config.layer_idx)
+        if layer_idx not in selected_layers or self._numerical_dump_pass >= max_passes:
+            return
+
+        output_dir = Path(dump_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pass_index = self._numerical_dump_pass
+        payload = {
+            "schema_version": 1,
+            "layer": layer_idx,
+            "pass": pass_index,
+            "hidden_states": hidden_states.detach().cpu().contiguous(),
+            "topk_ids": topk_ids.detach().cpu().contiguous(),
+            "topk_weights": topk_weights.detach().cpu().contiguous(),
+        }
+        output_path = output_dir / (
+            f"layer{layer_idx:02d}-pass{pass_index:05d}-pid{os.getpid()}.pt"
+        )
+        torch.save(payload, output_path)
+        self._pending_numerical_dump_paths.append(output_path)
+        self._numerical_dump_pass += 1
+        logger.info("KT numerical input dump written to %s", output_path)
+
+    def _maybe_dump_numerical_outputs(
+        self,
+        merged_output: torch.Tensor,
+        cpu_output: torch.Tensor,
+        gpu_routes: Optional[torch.Tensor],
+    ) -> None:
+        """Append explicitly enabled output stages to the matching input dump."""
+        pending_paths = self.__dict__.get("_pending_numerical_dump_paths")
+        if not pending_paths:
+            return
+        output_path = pending_paths.pop(0)
+        payload = torch.load(output_path, map_location="cpu")
+        payload["cpu_output"] = cpu_output.detach().cpu().contiguous()
+        if gpu_routes is not None:
+            payload["gpu_routes"] = gpu_routes.detach().cpu().contiguous()
+        payload["merged_output"] = merged_output.detach().cpu().contiguous()
+        torch.save(payload, output_path)
 
     def _sync_with_staged_input(
         self, staged_hidden_states: torch.Tensor
@@ -4306,6 +4401,11 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
                     self._sync_done_event
                 )
             output = output + cpu_output
+            if getattr(self.gpu_method, "_kt_return_fp32_contribution", False):
+                output = output.to(x.dtype)
+            self._maybe_dump_numerical_outputs(
+                output, cpu_output, None
+            )
         if _kt_timing:
             _kt_t_after_merge = time.perf_counter()
             # Optional: synchronize GPU at end of apply() to capture true GPU

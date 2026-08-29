@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 import torch
@@ -562,6 +564,39 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
 
         original_dtype = x.dtype
         num_tokens = x.shape[0]
+        dump_dir = os.environ.get("SGLANG_NPU_MOE_NUMERICAL_DUMP_DIR")
+        raw_dump_layers = os.environ.get("SGLANG_NPU_MOE_NUMERICAL_DUMP_LAYERS")
+        arm_file = os.environ.get("SGLANG_NPU_MOE_NUMERICAL_DUMP_ARM_FILE")
+        layer_id = getattr(self.moe_runner_config, "layer_id", None)
+        dump_this_pass = False
+        dump_payload = None
+        if dump_dir and raw_dump_layers and (not arm_file or Path(arm_file).is_file()):
+            try:
+                selected_layers = {
+                    int(value.strip())
+                    for value in raw_dump_layers.split(",")
+                    if value.strip()
+                }
+                max_passes = int(
+                    os.environ.get("SGLANG_NPU_MOE_NUMERICAL_DUMP_MAX_PASSES", "3")
+                )
+            except ValueError as error:
+                raise RuntimeError("invalid NPU MoE numerical dump configuration") from error
+            if max_passes <= 0:
+                raise RuntimeError(
+                    "SGLANG_NPU_MOE_NUMERICAL_DUMP_MAX_PASSES must be positive"
+                )
+            pass_index = getattr(self, "_npu_numerical_dump_pass", 0)
+            dump_this_pass = layer_id in selected_layers and pass_index < max_passes
+            if dump_this_pass:
+                dump_payload = {
+                    "schema_version": 1,
+                    "layer": int(layer_id),
+                    "pass": pass_index,
+                    "input": x.detach().cpu().contiguous(),
+                    "topk_ids": topk_ids.detach().cpu().contiguous(),
+                    "topk_weights": topk_weights.detach().cpu().contiguous(),
+                }
         topk_weights = topk_weights.to(x.dtype)
         # KT marks CPU-owned routes with expert ID -1.  Ascend's routing ops
         # require every active ID to be in the physical accelerator expert
@@ -591,6 +626,12 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
             )
         )
         expert_tokens = expert_tokens.to(torch.int64)
+        if dump_this_pass:
+            dump_payload["routed_input"] = hidden_states.detach().cpu().contiguous()
+            dump_payload["expanded_row_idx"] = (
+                expanded_row_idx.detach().cpu().contiguous()
+            )
+            dump_payload["expert_tokens"] = expert_tokens.detach().cpu().contiguous()
         w13_bias = [layer.w13_weight_bias] if self.with_bias else None
         w2_bias = [layer.w2_weight_bias] if self.with_bias else None
 
@@ -605,6 +646,8 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
             group_list=expert_tokens,
             output_dtype=original_dtype,
         )[0]
+        if dump_this_pass:
+            dump_payload["gmm1_gate_up"] = hidden_states.detach().cpu().contiguous()
 
         # act_fn:
         if self.moe_runner_config.activation == "npu_swiglu_oai":
@@ -617,6 +660,8 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
             from sglang.srt.layers.activation import GeluAndMul
 
             hidden_states = GeluAndMul()(hidden_states)
+        if dump_this_pass:
+            dump_payload["swiglu"] = hidden_states.detach().cpu().contiguous()
 
         # gmm2: down_proj
         hidden_states = torch.ops.npu.npu_grouped_matmul(
@@ -629,17 +674,37 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
             group_list=expert_tokens,
             output_dtype=original_dtype,
         )[0]
+        if dump_this_pass:
+            dump_payload["gmm2_down"] = hidden_states.detach().cpu().contiguous()
 
+        return_fp32_contribution = getattr(
+            self, "_kt_return_fp32_contribution", False
+        )
+        finalize_hidden_states = (
+            hidden_states.float() if return_fp32_contribution else hidden_states
+        )
+        finalize_weights = (
+            topk_weights.float() if return_fp32_contribution else topk_weights
+        )
         final_hidden_states = torch.ops.npu.npu_moe_finalize_routing(
-            hidden_states,
+            finalize_hidden_states,
             skip1=None,
             skip2=None,
             bias=None,
-            scales=topk_weights,
+            scales=finalize_weights,
             expanded_src_to_dst_row=expanded_row_idx,
             export_for_source_row=topk_ids,
             drop_pad_mode=2,
         )
+        if dump_this_pass:
+            dump_payload["final"] = final_hidden_states.detach().cpu().contiguous()
+            output_dir = Path(dump_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / (
+                f"layer{int(layer_id):02d}-pass{pass_index:05d}-pid{os.getpid()}.pt"
+            )
+            torch.save(dump_payload, output_path)
+            self._npu_numerical_dump_pass = pass_index + 1
 
         return StandardCombineInput(hidden_states=final_hidden_states)
 
