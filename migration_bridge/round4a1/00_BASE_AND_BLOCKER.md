@@ -39,4 +39,3 @@ remaining mismatches are the 16/32/64 prefixes of `v_struct_03`; they share one
 first divergence at generated token index 9. The post-divergence maximum
 absolute logprob delta is `2.4375150725245476`, so P1 remains blocked and P2/P3
 remain `NOT RUN`.
-

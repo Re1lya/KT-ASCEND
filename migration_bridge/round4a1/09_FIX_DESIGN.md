@@ -37,4 +37,3 @@ complexity, and was removed before the final diff.
 - no copied Ascend kernel;
 - no restored historical KML backend;
 - no P2/P3 execution while P1 is red.
-

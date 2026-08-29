@@ -29,4 +29,3 @@ Expected envelope after F1/F2:
 The broad Round2A/Round2B/Round2C/Round3/P2/P3 regression campaign was not
 started after P1 remained red. The targeted registered test protects the
 modified CPU/NPU boundary while avoiding a false claim of release readiness.
-

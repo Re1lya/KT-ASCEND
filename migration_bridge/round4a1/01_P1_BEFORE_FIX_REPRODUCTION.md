@@ -29,4 +29,3 @@ System-correctness checks excluded the earlier stream/buffer class of bugs:
 
 Therefore the entry blocker was classified as numerical/logits divergence,
 not lifecycle or routing corruption.
-

@@ -21,4 +21,3 @@ P3_RESUME_AUTHORIZED = NO
 
 The gate is not relaxed. See `ADR_R4A_NUMERICAL_ACCEPTANCE.md` for the residual
 backend decision.
-

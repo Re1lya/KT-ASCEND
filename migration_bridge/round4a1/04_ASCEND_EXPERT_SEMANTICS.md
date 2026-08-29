@@ -30,4 +30,3 @@ tested passes:
 - the final routed vector is rounded once to BF16;
 - this reconstruction is bitwise equal to production finalize;
 - sequential BF16 accumulation and FP32 (unrounded) routing weights are not.
-

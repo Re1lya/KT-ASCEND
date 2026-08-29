@@ -32,4 +32,3 @@ This removes the semantic R0/R2 mismatch. It does not make ARM LLAMAFILE SGEMM
 use the same reduction tree as Ascend GMM. Sparse residual BF16 differences are
 therefore possible even when storage and externally visible dtype boundaries
 match.
-

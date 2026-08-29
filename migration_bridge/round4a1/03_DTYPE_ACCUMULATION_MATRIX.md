@@ -25,4 +25,3 @@ input values is characteristic of a reduction-order boundary case.
 Separately rounding the SiLU result before multiplying is incorrect for the
 observed Ascend fused operator and worsens relative L2 back to roughly
 `1.7e-3`-`4.5e-3`.
-
