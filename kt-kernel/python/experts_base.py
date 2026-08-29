@@ -463,7 +463,12 @@ class BaseMoEWrapper(_MoEBase, ABC):
                 )
                 if status != 0:
                     raise RuntimeError(f"acl.rt.memcpy D2H failed with status {status}")
-            output_cpu = torch.zeros_like(input_cpu)
+            output_cpu = torch.zeros(
+                input_cpu.shape,
+                dtype=getattr(self, "output_dtype", input_cpu.dtype),
+                device="cpu",
+                pin_memory=True,
+            )
             batch_cpu = torch.tensor([batch_size], dtype=torch.int32, device="cpu")
             incremental = BaseMoEWrapper._layer_has_pending_deferred.get(self.layer_idx - 1, False)
             task = self.moe.forward_task(
@@ -475,7 +480,13 @@ class BaseMoEWrapper(_MoEBase, ABC):
                 output_cpu.data_ptr(),
                 incremental,
             )
-            self._npu_pending_forward = (input_cpu, ids_cpu, weights_cpu, output_cpu, batch_cpu)
+            self._npu_pending_forward = (
+                input_cpu,
+                ids_cpu,
+                weights_cpu,
+                output_cpu,
+                batch_cpu,
+            )
             self.cpu_infer.submit(task)
             BaseMoEWrapper._layer_has_pending_deferred[self.layer_idx] = False
             return
@@ -558,7 +569,11 @@ class BaseMoEWrapper(_MoEBase, ABC):
                 raise RuntimeError("no Ascend CPU expert forward is pending on this wrapper")
             self.cpu_infer.sync()
             output_cpu = pending[3]
-            output_npu = torch.empty_like(hidden_states)
+            output_npu = torch.empty(
+                output_cpu.shape,
+                dtype=output_cpu.dtype,
+                device=hidden_states.device,
+            )
             byte_count = output_cpu.numel() * output_cpu.element_size()
             import acl
 
