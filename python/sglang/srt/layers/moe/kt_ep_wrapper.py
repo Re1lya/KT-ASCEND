@@ -4044,6 +4044,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         self,
         merged_output: torch.Tensor,
         cpu_output: torch.Tensor,
+        gpu_output: torch.Tensor,
         gpu_routes: Optional[torch.Tensor],
     ) -> None:
         """Append explicitly enabled output stages to the matching input dump."""
@@ -4053,6 +4054,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         output_path = pending_paths.pop(0)
         payload = torch.load(output_path, map_location="cpu")
         payload["cpu_output"] = cpu_output.detach().cpu().contiguous()
+        payload["gpu_output"] = gpu_output.detach().cpu().contiguous()
         if gpu_routes is not None:
             payload["gpu_routes"] = gpu_routes.detach().cpu().contiguous()
         payload["merged_output"] = merged_output.detach().cpu().contiguous()
@@ -4400,11 +4402,12 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
                 device_module.current_stream(x.device).wait_event(
                     self._sync_done_event
                 )
+            gpu_output = output
             output = output + cpu_output
             if getattr(self.gpu_method, "_kt_return_fp32_contribution", False):
                 output = output.to(x.dtype)
             self._maybe_dump_numerical_outputs(
-                output, cpu_output, None
+                output, cpu_output, gpu_output, None
             )
         if _kt_timing:
             _kt_t_after_merge = time.perf_counter()
