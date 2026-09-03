@@ -53,3 +53,10 @@ failing sets; the bisection remains incomplete.
 Private LLAMAFILE/TP scratch A/B switches remained nondeterministic.  Reducing
 CPUInfer to one worker fixes `v_en_01` but not `v_struct_01`; it is a diagnostic
 control, not a P2 fix.
+
+| File | SHA256 | Result |
+|---|---|---|
+| `p2-l1-l17-cpu1-repeat.json` | `cbe8f8772f04c96a38527a185d11789e671b4e5e2c64c2900ea75e22103880f2` | exact, 1/10 hashes |
+| `p2-l1-l17-cpu2-repeat.json` | `8ce2e91abb93930bc41a097fe680c0c789f8994941a8ff121ed5d4860255b57b` | exact, 1/10 hashes |
+| `p2-l1-l17-cpu4-repeat.json` | `ddaa685d81c35c7bfa538fe98bec8d09844f542baf4e8d72199ccfe2fec64239` | exact, 1/10 hashes |
+| `p2-l1-l17-cpu8-repeat.json` | `6b319883197008703f437a424f33811704db6d8550a45cdc548916c859db55f6` | nondeterministic, 2/10 hashes |

@@ -23,9 +23,19 @@ production fix。
 | full P2 / `v_en_01` | exact, 10 repeats | 1 |
 | full P2 / `v_struct_01` | nondeterministic, 10 repeats | 2 |
 
+在 `{1,17}` 上进一步限定 worker threshold：
+
+| CPUInfer workers | Result | Unique hashes |
+|---:|---|---:|
+| 1 | exact, 10 repeats | 1 |
+| 2 | exact, 10 repeats | 1 |
+| 4 | exact, 10 repeats | 1 |
+| 8 | nondeterministic, 10 repeats | 2 |
+
 这证明 CPU worker parallelism 是 `v_en_01` failure 的必要触发条件，但不是 full P2
-blocker 的唯一原因。单线程仅是定位控制：它改变冻结的 CPUInfer worker count，不能作为
-P2 production fix，也不能据此进入 P3。
+blocker 的唯一原因。`{1,17}` 的首次失败并发区间已收缩为 5--8 workers。较低 worker
+count 仅是定位控制：它改变冻结的 CPUInfer worker count，不能作为 P2 production fix，
+也不能据此进入 P3。
 
 ## 下一步
 
