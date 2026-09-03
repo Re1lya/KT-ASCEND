@@ -55,6 +55,13 @@ def main() -> None:
         default=[],
         help="Run only this prompt ID; may be supplied more than once.",
     )
+    parser.add_argument(
+        "--append-input-id",
+        type=int,
+        action="append",
+        default=[],
+        help="Append a fixed teacher-forced token ID to every selected prompt.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     corpus = json.loads(args.corpus.read_text())
@@ -78,15 +85,17 @@ def main() -> None:
     rows = []
     for prompt in prompts:
         started = time.perf_counter()
+        input_ids = [int(value) for value in prompt["input_ids"]]
+        input_ids.extend(args.append_input_id)
         runs = [
-            generate(args.base_url, prompt["input_ids"], args.max_new_tokens)
+            generate(args.base_url, input_ids, args.max_new_tokens)
             for _ in range(args.repeats)
         ]
         short = (
             {}
             if args.skip_prefix_check
             else {
-                str(length): generate(args.base_url, prompt["input_ids"], length)
+                str(length): generate(args.base_url, input_ids, length)
                 for length in (8, 16, 32)
             }
         )
@@ -97,6 +106,9 @@ def main() -> None:
         rows.append(
             {
                 "prompt_id": prompt["id"],
+                "input_ids_sha256": hashlib.sha256(
+                    json.dumps(input_ids, separators=(",", ":")).encode()
+                ).hexdigest(),
                 "repeat_exact": repeat_exact,
                 "prefix_exact": prefix_exact,
                 "hashes64": [hashlib.sha256(json.dumps(run).encode()).hexdigest() for run in runs],
@@ -113,6 +125,7 @@ def main() -> None:
         "mode": args.mode,
         "corpus_sha256": corpus["sha256"],
         "prompt_ids": [prompt["id"] for prompt in prompts],
+        "appended_input_ids": args.append_input_id,
         "repeats": args.repeats,
         "max_new_tokens": args.max_new_tokens,
         "prefix_check_enabled": not args.skip_prefix_check,
