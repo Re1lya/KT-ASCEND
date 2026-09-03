@@ -26,3 +26,16 @@ Layer 26 input, router values, and NPU partial are byte-identical.  The
 per-wrapper CPUInfer diagnostic created four distinct WorkerPools but retained
 same-path nondeterminism (8 unique outputs in 10 repeats); it is evidence
 against shared CPUInfer queueing as the sole cause.
+
+## Layer bisection (in progress)
+
+| File | SHA256 | Result |
+|---|---|---|
+| `p2-bisection-l26-repeat.json` | `f9b6e6791faa710fcda61974bce19e461fdf4a7ff5ee7a5cda70a0086002df64` | exact, 1/10 hashes |
+| `p2-bisection-l17-l26-repeat.json` | `1daf63623fd31c32e03da92d629b508a03ed0108bf4a0353c5f01c3bae6c6bfa` | exact, 1/10 hashes |
+| `p2-bisection-l9-repeat.json` | `60572bdf01d1d615fe5b488098ea9de51f81cc27a7967215d3e5ccd0584a7b3d` | exact, 1/10 hashes |
+| `p2-bisection-l9-l17-repeat.json` | `efb884c0026359cde3b99598a7ae3f7f89e1b73421a2e9ce2b06dafea886588b` | nondeterministic, 3/10 hashes |
+
+The four diagnostic placements preserve frozen P2 expert IDs.  They are not
+acceptance placements.  `{9,17}` is the current minimal known failing set;
+the bisection remains incomplete.
