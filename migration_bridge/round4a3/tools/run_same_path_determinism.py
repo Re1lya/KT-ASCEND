@@ -43,6 +43,12 @@ def main() -> None:
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--mode", required=True)
     parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument(
+        "--skip-prefix-check",
+        action="store_true",
+        help="Do not issue the 8/16/32 token prefix requests.",
+    )
     parser.add_argument(
         "--prompt-id",
         action="append",
@@ -63,21 +69,41 @@ def main() -> None:
         raise SystemExit(
             "unknown prompt ID(s): " + ", ".join(sorted(missing_prompt_ids))
         )
+    if args.max_new_tokens <= 0:
+        raise SystemExit("--max-new-tokens must be positive")
+    if not args.skip_prefix_check and args.max_new_tokens < 32:
+        raise SystemExit(
+            "--max-new-tokens must be at least 32 unless --skip-prefix-check is used"
+        )
     rows = []
     for prompt in prompts:
         started = time.perf_counter()
-        runs64 = [generate(args.base_url, prompt["input_ids"], 64) for _ in range(args.repeats)]
-        short = {str(length): generate(args.base_url, prompt["input_ids"], length) for length in (8, 16, 32)}
-        repeat_exact = all(run == runs64[0] for run in runs64[1:])
-        prefix_exact = all(short[str(length)] == runs64[0][:length] for length in (8, 16, 32))
+        runs = [
+            generate(args.base_url, prompt["input_ids"], args.max_new_tokens)
+            for _ in range(args.repeats)
+        ]
+        short = (
+            {}
+            if args.skip_prefix_check
+            else {
+                str(length): generate(args.base_url, prompt["input_ids"], length)
+                for length in (8, 16, 32)
+            }
+        )
+        repeat_exact = all(run == runs[0] for run in runs[1:])
+        prefix_exact = args.skip_prefix_check or all(
+            short[str(length)] == runs[0][:length] for length in (8, 16, 32)
+        )
         rows.append(
             {
                 "prompt_id": prompt["id"],
                 "repeat_exact": repeat_exact,
                 "prefix_exact": prefix_exact,
-                "hashes64": [hashlib.sha256(json.dumps(run).encode()).hexdigest() for run in runs64],
+                "hashes64": [hashlib.sha256(json.dumps(run).encode()).hexdigest() for run in runs],
+                "hashes": [hashlib.sha256(json.dumps(run).encode()).hexdigest() for run in runs],
                 "short_outputs": short,
-                "reference64": runs64[0],
+                "reference64": runs[0],
+                "reference": runs[0],
                 "elapsed_seconds": time.perf_counter() - started,
             }
         )
@@ -88,6 +114,8 @@ def main() -> None:
         "corpus_sha256": corpus["sha256"],
         "prompt_ids": [prompt["id"] for prompt in prompts],
         "repeats": args.repeats,
+        "max_new_tokens": args.max_new_tokens,
+        "prefix_check_enabled": not args.skip_prefix_check,
         "temperature": 0,
         "protocol_seed": 0,
         "all_repeat_exact": all(row["repeat_exact"] for row in rows),
