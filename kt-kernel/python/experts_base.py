@@ -173,6 +173,7 @@ class _MoEBase:
         cpuinfer_threads: int,
         threadpool_count: int,
         numa_nodes=None,
+        isolation_key=None,
     ):
         """
         Get or create the CPUInfer singleton instance.
@@ -181,6 +182,8 @@ class _MoEBase:
             cpuinfer_threads: Total number of CPU inference threads
             threadpool_count: Number of NUMA subpools (TP count)
             numa_nodes: Explicit list of NUMA node IDs. If None, defaults to sequential.
+            isolation_key: Optional debug-only cache discriminator.  When set,
+                callers receive a CPUInfer dedicated to that wrapper.
 
         Returns:
             CPUInfer singleton instance
@@ -199,6 +202,8 @@ class _MoEBase:
             for i in range(threadpool_count)
         ]
         config_key = (tuple(subpool_numa_map), tuple(subpool_thread_count))
+        if isolation_key is not None:
+            config_key = (*config_key, "debug-wrapper", isolation_key)
 
         if config_key not in cls._cpu_infer_instances:
             worker_config = kt_kernel_ext.WorkerPoolConfig()
@@ -347,8 +352,20 @@ class BaseMoEWrapper(_MoEBase, ABC):
         # the clamp branch when limit==0). Origin: kt-sglang 耦合.
         self.swiglu_limit = float(swiglu_limit)
 
-        # Initialize CPU inference engine (singleton via shared base class)
-        self.cpu_infer = self._get_cpu_infer(cpuinfer_threads, threadpool_count, numa_nodes=numa_nodes)
+        # Default behavior is the historical shared worker pool.  This
+        # diagnostic-only switch isolates each wrapper's queue without
+        # changing arithmetic, placement, or normal production behavior.
+        isolation_key = (
+            self.layer_idx
+            if os.environ.get("KT_DEBUG_PER_WRAPPER_CPUINFER") == "1"
+            else None
+        )
+        self.cpu_infer = self._get_cpu_infer(
+            cpuinfer_threads,
+            threadpool_count,
+            numa_nodes=numa_nodes,
+            isolation_key=isolation_key,
+        )
 
         # Backend-specific initialization happens in subclasses
         self.moe = None
