@@ -41,3 +41,15 @@ against shared CPUInfer queueing as the sole cause.
 The four diagnostic placements preserve frozen P2 expert IDs.  They are not
 acceptance placements.  `{1,17}` and `{9,17}` are the current minimal known
 failing sets; the bisection remains incomplete.
+
+## Parallel-execution A/B
+
+| File | SHA256 | Result |
+|---|---|---|
+| `p2-l1-l17-private-output-repeat.json` | `7af3772d4150b2ef496dd7243c3cbc7ced44631467d9d5b024c01556ce687280` | nondeterministic, 2/10 hashes |
+| `p2-cpuinfer1-v-en-repeat.json` | `338904b30583447851039562f226c4c6a8ec6f754b4af73e5ed82762b5de7420` | exact, 1/10 hashes |
+| `p2-cpuinfer1-v-struct-repeat.json` | `79c4c33f7157ecd30f8ffe830ce77ff6af5e5f5b08691cebeb71950a1d0cf02c` | nondeterministic, 2/10 hashes |
+
+Private LLAMAFILE/TP scratch A/B switches remained nondeterministic.  Reducing
+CPUInfer to one worker fixes `v_en_01` but not `v_struct_01`; it is a diagnostic
+control, not a P2 fix.
