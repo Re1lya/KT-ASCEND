@@ -9,6 +9,8 @@ This module contains base classes and utilities shared across all backend implem
 
 from __future__ import annotations
 
+import hashlib
+import json
 import torch
 from typing import Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
@@ -16,6 +18,23 @@ import os
 import ctypes
 
 from kt_kernel import kt_kernel_ext
+
+
+def _cpu_tensor_sha256(tensor: torch.Tensor) -> str:
+    """Hash exact CPU tensor storage for default-off task diagnostics."""
+    value = tensor.detach().contiguous()
+    if value.device.type != "cpu":
+        raise ValueError("CPU task trace received a non-CPU tensor")
+    return hashlib.sha256(value.view(torch.uint8).numpy().tobytes()).hexdigest()
+
+
+def _write_cpu_task_trace(payload: dict) -> None:
+    """Append a compact JSONL event when explicitly armed by the operator."""
+    trace_path = os.environ.get("KT_DEBUG_CPU_TASK_TRACE_FILE")
+    if not trace_path:
+        return
+    with open(trace_path, "a", encoding="utf-8") as writer:
+        writer.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
 
 
 def _allocate_cpu_expert_mask(num_experts: int, *, zero: bool) -> torch.Tensor:
@@ -274,6 +293,12 @@ class BaseMoEWrapper(_MoEBase, ABC):
     """
 
     _layer_has_pending_deferred: Dict[int, bool] = {}
+    _cpu_task_trace_sequence = 0
+
+    @classmethod
+    def _next_cpu_task_trace_sequence(cls) -> int:
+        cls._cpu_task_trace_sequence += 1
+        return cls._cpu_task_trace_sequence
 
     def __init__(
         self,
@@ -488,6 +513,40 @@ class BaseMoEWrapper(_MoEBase, ABC):
             )
             batch_cpu = torch.tensor([batch_size], dtype=torch.int32, device="cpu")
             incremental = BaseMoEWrapper._layer_has_pending_deferred.get(self.layer_idx - 1, False)
+            trace = None
+            if os.environ.get("KT_DEBUG_CPU_TASK_TRACE_FILE"):
+                trace = {
+                    "schema_version": 1,
+                    "sequence": self._next_cpu_task_trace_sequence(),
+                    "layer": int(self.layer_idx),
+                    "wrapper_id": id(self),
+                    "cpuinfer_id": id(self.cpu_infer),
+                    "batch_size": int(batch_size),
+                    "input": {
+                        "shape": list(input_cpu.shape),
+                        "dtype": str(input_cpu.dtype),
+                        "data_ptr": int(input_cpu.data_ptr()),
+                        "sha256": _cpu_tensor_sha256(input_cpu),
+                    },
+                    "topk_ids": {
+                        "shape": list(ids_cpu.shape),
+                        "data_ptr": int(ids_cpu.data_ptr()),
+                        "sha256": _cpu_tensor_sha256(ids_cpu),
+                    },
+                    "topk_weights": {
+                        "shape": list(weights_cpu.shape),
+                        "data_ptr": int(weights_cpu.data_ptr()),
+                        "sha256": _cpu_tensor_sha256(weights_cpu),
+                    },
+                    "output": {
+                        "shape": list(output_cpu.shape),
+                        "dtype": str(output_cpu.dtype),
+                        "data_ptr": int(output_cpu.data_ptr()),
+                        "pre_task_sha256": _cpu_tensor_sha256(output_cpu),
+                    },
+                    "incremental": bool(incremental),
+                }
+                _write_cpu_task_trace({"event": "submit", **trace})
             task = self.moe.forward_task(
                 batch_cpu.data_ptr(),
                 ids_cpu.size(-1),
@@ -503,6 +562,7 @@ class BaseMoEWrapper(_MoEBase, ABC):
                 weights_cpu,
                 output_cpu,
                 batch_cpu,
+                trace,
             )
             self.cpu_infer.submit(task)
             BaseMoEWrapper._layer_has_pending_deferred[self.layer_idx] = False
@@ -586,6 +646,19 @@ class BaseMoEWrapper(_MoEBase, ABC):
                 raise RuntimeError("no Ascend CPU expert forward is pending on this wrapper")
             self.cpu_infer.sync()
             output_cpu = pending[3]
+            trace = pending[5]
+            if trace is not None:
+                _write_cpu_task_trace(
+                    {
+                        "event": "sync",
+                        **trace,
+                        "output": {
+                            **trace["output"],
+                            "post_task_sha256": _cpu_tensor_sha256(output_cpu),
+                            "finite": bool(torch.isfinite(output_cpu).all().item()),
+                        },
+                    }
+                )
             output_npu = torch.empty(
                 output_cpu.shape,
                 dtype=output_cpu.dtype,
