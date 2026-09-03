@@ -13,3 +13,16 @@ the A3 host artifact directory and are referenced by manifest and SHA256.
 
 The JSON payload's internal canonical SHA256 is
 `7a4e74ce97b6eab803b084b9eb6259fea33c8f9023cf30aebf80c0e80fe54ef8`.
+
+## First matched-history capture
+
+| File | SHA256 |
+|---|---|
+| `p2-v-en-01-token1-stage-comparison.json` | `8db80e2ccc25ec54170ca8f24bd2fb4c95e9bf2c03d0c3950f6428bda2f9ddb6` |
+| `p2-v-en-01-per-wrapper-cpuinfer-repeats.json` | `43183d8c0bd081738381d1d56f8cc06dc3a108bf0110ea39ec1753afc03b8027` |
+
+The matched-history capture first differs at Layer 26 `cpu_output`, while the
+Layer 26 input, router values, and NPU partial are byte-identical.  The
+per-wrapper CPUInfer diagnostic created four distinct WorkerPools but retained
+same-path nondeterminism (8 unique outputs in 10 repeats); it is evidence
+against shared CPUInfer queueing as the sole cause.
