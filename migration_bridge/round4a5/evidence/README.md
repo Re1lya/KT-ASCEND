@@ -35,7 +35,9 @@ against shared CPUInfer queueing as the sole cause.
 | `p2-bisection-l17-l26-repeat.json` | `1daf63623fd31c32e03da92d629b508a03ed0108bf4a0353c5f01c3bae6c6bfa` | exact, 1/10 hashes |
 | `p2-bisection-l9-repeat.json` | `60572bdf01d1d615fe5b488098ea9de51f81cc27a7967215d3e5ccd0584a7b3d` | exact, 1/10 hashes |
 | `p2-bisection-l9-l17-repeat.json` | `efb884c0026359cde3b99598a7ae3f7f89e1b73421a2e9ce2b06dafea886588b` | nondeterministic, 3/10 hashes |
+| `p2-bisection-l1-repeat.json` | `683fe8f48be4602015010af89cb21712e9543fc1a1c66d30f29f63e231ccc0c0` | exact, 1/10 hashes |
+| `p2-bisection-l1-l17-repeat.json` | `2adbfe69feddf6eeec302f70db98f3e07fbd349839707d1c82370f400a5b7e38` | nondeterministic, 5/10 hashes |
 
 The four diagnostic placements preserve frozen P2 expert IDs.  They are not
-acceptance placements.  `{9,17}` is the current minimal known failing set;
-the bisection remains incomplete.
+acceptance placements.  `{1,17}` and `{9,17}` are the current minimal known
+failing sets; the bisection remains incomplete.
