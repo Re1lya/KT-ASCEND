@@ -43,11 +43,28 @@ def main() -> None:
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--mode", required=True)
     parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument(
+        "--prompt-id",
+        action="append",
+        default=[],
+        help="Run only this prompt ID; may be supplied more than once.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     corpus = json.loads(args.corpus.read_text())
+    selected_prompt_ids = set(args.prompt_id)
+    prompts = [
+        prompt
+        for prompt in corpus["prompts"]
+        if not selected_prompt_ids or prompt["id"] in selected_prompt_ids
+    ]
+    missing_prompt_ids = selected_prompt_ids - {prompt["id"] for prompt in prompts}
+    if missing_prompt_ids:
+        raise SystemExit(
+            "unknown prompt ID(s): " + ", ".join(sorted(missing_prompt_ids))
+        )
     rows = []
-    for prompt in corpus["prompts"]:
+    for prompt in prompts:
         started = time.perf_counter()
         runs64 = [generate(args.base_url, prompt["input_ids"], 64) for _ in range(args.repeats)]
         short = {str(length): generate(args.base_url, prompt["input_ids"], length) for length in (8, 16, 32)}
@@ -69,6 +86,7 @@ def main() -> None:
         "schema_version": 1,
         "mode": args.mode,
         "corpus_sha256": corpus["sha256"],
+        "prompt_ids": [prompt["id"] for prompt in prompts],
         "repeats": args.repeats,
         "temperature": 0,
         "protocol_seed": 0,
