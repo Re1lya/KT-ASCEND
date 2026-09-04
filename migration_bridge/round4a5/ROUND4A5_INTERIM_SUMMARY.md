@@ -63,6 +63,13 @@ capture actual divergent requests with lightweight C++ tile/write-coverage
 instrumentation, separately for `v_en_01` and `v_struct_01`, then prove the
 minimal ownership or kernel fix before re-running P2 acceptance gates.
 
+## Retained Round 2B correction
+
+The previous standalone D2H/CPUInfer/H2D regression was traced to its test
+allocating BF16 output storage for LLAMAFILE's FP32 routed output.  Correcting
+the test buffer dtype makes the pipeline pass; this is separate from, and does
+not resolve, P2 same-path nondeterminism.
+
 Evidence hashes and commands are indexed in `evidence/README.md`; detailed
 findings are in `01_FIRST_DIVERGENCE_CAPTURE.md`, `02_LAYER_BISECTION.md`, and
 `03_PARALLEL_EXECUTION_AB.md`.
