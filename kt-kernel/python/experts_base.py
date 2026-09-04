@@ -659,18 +659,30 @@ class BaseMoEWrapper(_MoEBase, ABC):
                         },
                     }
                 )
+            output_for_h2d = output_cpu
+            if os.environ.get("KT_DEBUG_NPU_CPU_OUTPUT_CLONE") == "1":
+                # Diagnostic-only: decouple raw ACL H2D from the CPUInfer
+                # task's pinned output allocation.  Keep the clone alive until
+                # the next (already synchronized) forward on this wrapper.
+                output_for_h2d = torch.empty_like(
+                    output_cpu,
+                    device="cpu",
+                    pin_memory=True,
+                )
+                output_for_h2d.copy_(output_cpu)
+                self._npu_debug_h2d_source = output_for_h2d
             output_npu = torch.empty(
-                output_cpu.shape,
-                dtype=output_cpu.dtype,
+                output_for_h2d.shape,
+                dtype=output_for_h2d.dtype,
                 device=hidden_states.device,
             )
-            byte_count = output_cpu.numel() * output_cpu.element_size()
+            byte_count = output_for_h2d.numel() * output_for_h2d.element_size()
             import acl
 
             status = acl.rt.memcpy(
                 output_npu.data_ptr(),
                 byte_count,
-                output_cpu.data_ptr(),
+                output_for_h2d.data_ptr(),
                 byte_count,
                 1,  # ACL_MEMCPY_HOST_TO_DEVICE
             )
