@@ -505,6 +505,17 @@ class BaseMoEWrapper(_MoEBase, ABC):
                 )
                 if status != 0:
                     raise RuntimeError(f"acl.rt.memcpy D2H failed with status {status}")
+            if os.environ.get("KT_DEBUG_NPU_CPU_INPUT_CLONE") == "1":
+                # Diagnostic-only: ensure the CPU task consumes buffers that
+                # are distinct from raw ACL D2H destinations.
+                def _clone_pinned(value: torch.Tensor) -> torch.Tensor:
+                    clone = torch.empty_like(value, device="cpu", pin_memory=True)
+                    clone.copy_(value)
+                    return clone
+
+                input_cpu = _clone_pinned(input_cpu)
+                ids_cpu = _clone_pinned(ids_cpu)
+                weights_cpu = _clone_pinned(weights_cpu)
             output_cpu = torch.zeros(
                 input_cpu.shape,
                 dtype=getattr(self, "output_dtype", input_cpu.dtype),
