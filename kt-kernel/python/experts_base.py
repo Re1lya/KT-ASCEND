@@ -476,9 +476,10 @@ class BaseMoEWrapper(_MoEBase, ABC):
         if hidden_states.device.type == "npu" and self.max_deferred_experts_per_token == 0:
             if getattr(self, "_npu_pending_forward", None) is not None:
                 raise RuntimeError("an Ascend CPU expert forward is already pending on this wrapper")
-            # A raw pointer consumer cannot participate in torch_npu's internal
-            # copy-stream dependency tracking.  Use CANN's synchronous memcpy
-            # and own the host tensors for the complete CPUInfer lifetime.
+            # Keep the host tensors alive for the complete CPUInfer lifetime.
+            # The transfers themselves must remain framework-managed: raw ACL
+            # pointer memcpy bypasses torch_npu stream dependencies and was the
+            # source of P2 same-path nondeterminism.
             import acl
 
             input_npu = flat_hidden_states.to(dtype=torch.bfloat16).contiguous()
@@ -490,27 +491,12 @@ class BaseMoEWrapper(_MoEBase, ABC):
             input_cpu = torch.empty_like(input_npu, device="cpu", pin_memory=True)
             ids_cpu = torch.empty_like(ids_npu, device="cpu", pin_memory=True)
             weights_cpu = torch.empty_like(weights_npu, device="cpu", pin_memory=True)
-            torch_transfer_debug = os.environ.get("KT_DEBUG_NPU_TORCH_TRANSFERS") == "1"
             for destination, source in (
                 (input_cpu, input_npu),
                 (ids_cpu, ids_npu),
                 (weights_cpu, weights_npu),
             ):
-                if torch_transfer_debug:
-                    # Diagnostic-only: exercise torch_npu's stream/lifetime
-                    # tracking instead of passing raw pointers to ACL.
-                    destination.copy_(source, non_blocking=False)
-                    continue
-                byte_count = destination.numel() * destination.element_size()
-                status = acl.rt.memcpy(
-                    destination.data_ptr(),
-                    byte_count,
-                    source.data_ptr(),
-                    byte_count,
-                    2,  # ACL_MEMCPY_DEVICE_TO_HOST
-                )
-                if status != 0:
-                    raise RuntimeError(f"acl.rt.memcpy D2H failed with status {status}")
+                destination.copy_(source, non_blocking=False)
             if os.environ.get("KT_DEBUG_NPU_CPU_INPUT_CLONE") == "1":
                 # Diagnostic-only: ensure the CPU task consumes buffers that
                 # are distinct from raw ACL D2H destinations.
@@ -693,24 +679,7 @@ class BaseMoEWrapper(_MoEBase, ABC):
                 dtype=output_for_h2d.dtype,
                 device=hidden_states.device,
             )
-            if os.environ.get("KT_DEBUG_NPU_TORCH_TRANSFERS") == "1":
-                # See the D2H counterpart in submit_forward.  This uses the
-                # same arithmetic and buffers while replacing only the raw
-                # ACL transfer path with the framework-owned one.
-                output_npu.copy_(output_for_h2d, non_blocking=False)
-            else:
-                byte_count = output_for_h2d.numel() * output_for_h2d.element_size()
-                import acl
-
-                status = acl.rt.memcpy(
-                    output_npu.data_ptr(),
-                    byte_count,
-                    output_for_h2d.data_ptr(),
-                    byte_count,
-                    1,  # ACL_MEMCPY_HOST_TO_DEVICE
-                )
-                if status != 0:
-                    raise RuntimeError(f"acl.rt.memcpy H2D failed with status {status}")
+            output_npu.copy_(output_for_h2d, non_blocking=False)
             self._npu_pending_forward = None
             return output_npu.view_as(hidden_states)
 
