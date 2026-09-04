@@ -1,10 +1,11 @@
 # Round 4A.5 Interim Summary: P2 Determinism Investigation
 
-Status: `P2_SAME_PATH_NONDETERMINISM = BLOCKED`
+Status: `ROOT_CAUSE_ATTRIBUTED; FIX_QUALIFICATION_PENDING`
 
 This document records diagnostic evidence only.  It does not change the frozen
 P2 placement, numerical contract, `B_pair`, coverage target, or production
-execution semantics.  P3 remains `NOT_RUN`.
+execution semantics.  P3 remains `NOT_RUN` pending full P2 qualification of a
+production fix.
 
 ## Reproduced blocker
 
@@ -55,13 +56,37 @@ Thus the current minimal known failing sets are `{1,17}` and `{9,17}`.
 - Full P2 with one CPU worker made `v_en_01` exact but left `v_struct_01`
   nondeterministic.  It is a localization control, not a fix.
 
+## Root-cause attribution: raw ACL transfer integration
+
+The Ascend-specific path copied CPU-expert inputs and outputs with raw
+`acl.rt.memcpy` pointer calls.  Those calls bypass framework-owned NPU stream
+and tensor-lifetime tracking.  This is now the attributed integration defect:
+the raw host-pointer transfer path can expose non-deterministic visibility or
+ordering across the SGLang/CANN request lifecycle.
+
+Evidence under the same frozen P2 placement, 16 CPUInfer workers, one request,
+sequential-control mode, 64 generated tokens, and ten repeats:
+
+| Variant | Prompt | Result | Unique hashes |
+|---|---|---|---:|
+| raw ACL D2H destination cloned before CPU task | `v_en_01` | fail | 7 |
+| framework-managed D2H + H2D (`KT_DEBUG_NPU_TORCH_TRANSFERS=1`) | `v_en_01` | exact | 1 |
+| framework-managed D2H + H2D (`KT_DEBUG_NPU_TORCH_TRANSFERS=1`) | `v_struct_01` | exact | 1 |
+
+The first control rejects D2H destination-buffer ownership as the sole cause.
+The second and third controls change only the transfer API and make both prior
+failure classes exact.  They also agree with fixed-input direct CPU replay,
+which was exact.  This attributes the P2 blocker to the raw ACL transfer
+integration rather than LLAMAFILE arithmetic, layer placement, or a shared
+CPU scratch buffer.  It does not attribute a defect to CANN itself.
+
 ## Review and next work
 
-The branch adds default-off diagnostics and evidence only.  The experimental
-isolation switches are not proposed as production fixes.  Next work must
-capture actual divergent requests with lightweight C++ tile/write-coverage
-instrumentation, separately for `v_en_01` and `v_struct_01`, then prove the
-minimal ownership or kernel fix before re-running P2 acceptance gates.
+The branch adds default-off diagnostics and evidence only.  The next change
+should promote the framework-managed transfer branch into the normal Ascend
+path, remove the diagnostic environment gate, then re-run the full frozen P2
+acceptance gates (both corpus prompts and the required numerical checks).
+Only after that qualification may P3 be considered.
 
 ## Retained Round 2B correction
 
@@ -71,5 +96,5 @@ the test buffer dtype makes the pipeline pass; this is separate from, and does
 not resolve, P2 same-path nondeterminism.
 
 Evidence hashes and commands are indexed in `evidence/README.md`; detailed
-findings are in `01_FIRST_DIVERGENCE_CAPTURE.md`, `02_LAYER_BISECTION.md`, and
-`03_PARALLEL_EXECUTION_AB.md`.
+findings are in `01_FIRST_DIVERGENCE_CAPTURE.md`, `02_LAYER_BISECTION.md`,
+`03_PARALLEL_EXECUTION_AB.md`, and `05_RAW_ACL_TRANSFER_ROOT_CAUSE.md`.

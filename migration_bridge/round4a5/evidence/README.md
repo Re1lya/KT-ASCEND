@@ -72,3 +72,18 @@ The direct replay uses real captured CPU inputs, router IDs, and weights from
 the frozen P2 GGUF.  It does not reproduce nondeterminism, while the complete
 server path does; this excludes fixed-input CPU MoE computation as a sufficient
 cause and rejects shared SGLang staging as a sole cause.
+
+## Raw ACL transfer A/B
+
+| A3 artifact | SHA256 | Result |
+|---|---|---|
+| `p2-input-clone/repeats-v_en_01.json` | `c1956d478c6578749959ea16f5b045135014034c24b67d15f7130380da405e76` | raw ACL D2H destination cloned; nondeterministic, 7/10 hashes |
+| `p2-torch-transfers/repeats-v_en_01.json` | `76c217ecfa9c494a93306c0f842ff7f65e3d2dda4c54a94e05a5514dc230167b` | framework D2H/H2D; exact, 1/10 hashes |
+| `p2-torch-transfers-struct/repeats-v_struct_01.json` | `1d312b0cf70f3f5b593caef2fe97a20eb3f7c88464dc61ecc7109eec3c661a86` | framework D2H/H2D; exact, 1/10 hashes |
+
+The two exact runs enable only `KT_DEBUG_NPU_TORCH_TRANSFERS=1`, which swaps
+raw `acl.rt.memcpy` pointer calls for blocking framework `copy_` operations.
+They retain the frozen P2 model, placement, worker count, sequential control,
+and request envelope.  Together with the failed D2H destination-clone control,
+they attribute the blocker to raw ACL transfer integration; see
+`../05_RAW_ACL_TRANSFER_ROOT_CAUSE.md`.
