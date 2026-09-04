@@ -9,6 +9,8 @@
 - 为每个 wrapper 创建独立 CPUInfer/WorkerPool 后仍有 8 个 output hash；
 - 为每个 LLAMAFILE wrapper 私有化 scratch 后仍有 3 个 output hash；
 - 为每个 TP MoE wrapper 私有化 merge-output storage 后仍有 2 个 output hash。
+- 为每个 SGLang CPU-enabled layer 分配独立 NPU staging buffer 后，full P2
+  `v_en_01` 仍有 7 个 output hash。
 
 这些 buffer/ownership 路径存在实现风险，但都不能单独解释 P2 failure。因此它们不能作为
 production fix。
@@ -39,6 +41,10 @@ count 仅是定位控制：它改变冻结的 CPUInfer worker count，不能作�
 
 ## 下一步
 
-在保持 16 workers 的失败条件下，使用比 hash dump 更轻的 C++ per-job completion/write
-coverage instrumentation，分别对 `v_en_01` 与 `v_struct_01` 捕获实际分叉 request。重点检查
-LLAMAFILE work-stealing job 中 task ownership、output tile coverage 和任何底层静态/线程局部状态。
+以捕获的真实 Layer 1/17 CPU-boundary tensors 直接交替 replay LLAMAFILE 100 次，在 8 workers
+下仍是 exact。故固定 CPU inputs 上的 CPU kernel 本身不复现；问题必须依赖完整 SGLang/CANN
+request lifecycle、跨 forward 状态或随 decode history 演进的交互。
+
+下一步需要在完整失败 request 中用轻量 C++ generation/coverage instrumentation 标记每个 CPU
+task 与 H2D consumer，分别对 `v_en_01` 与 `v_struct_01` 捕获实际分叉 forward。重点检查跨
+forward task completion、buffer generation 和 write coverage，而不是再修改固定 CPU kernel。

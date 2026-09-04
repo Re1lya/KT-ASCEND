@@ -60,3 +60,15 @@ control, not a P2 fix.
 | `p2-l1-l17-cpu2-repeat.json` | `8ce2e91abb93930bc41a097fe680c0c789f8994941a8ff121ed5d4860255b57b` | exact, 1/10 hashes |
 | `p2-l1-l17-cpu4-repeat.json` | `ddaa685d81c35c7bfa538fe98bec8d09844f542baf4e8d72199ccfe2fec64239` | exact, 1/10 hashes |
 | `p2-l1-l17-cpu8-repeat.json` | `6b319883197008703f437a424f33811704db6d8550a45cdc548916c859db55f6` | nondeterministic, 2/10 hashes |
+
+## Direct CPU replay and staging isolation
+
+| File | SHA256 | Result |
+|---|---|---|
+| `p2-direct-l1-l17-cpu8-summary.json` | `8ce789a27ba6c174c57decf90ca78774d18e3320877066d1b28dfe903d0777e8` | direct L1→L17 replay, 8 workers, exact for 100 repeats |
+| `p2-per-layer-staging-v-en-repeat.json` | `98d221a828942ffd6ad38898b363a9dd2549ffcf26ab21c0052c7e353d3c834f` | per-layer staging, nondeterministic, 7/10 hashes |
+
+The direct replay uses real captured CPU inputs, router IDs, and weights from
+the frozen P2 GGUF.  It does not reproduce nondeterminism, while the complete
+server path does; this excludes fixed-input CPU MoE computation as a sufficient
+cause and rejects shared SGLang staging as a sole cause.
