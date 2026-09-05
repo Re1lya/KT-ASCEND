@@ -80,13 +80,15 @@ which was exact.  This attributes the P2 blocker to the raw ACL transfer
 integration rather than LLAMAFILE arithmetic, layer placement, or a shared
 CPU scratch buffer.  It does not attribute a defect to CANN itself.
 
-## Review and next work
+## 修复后的复验状态
 
-The branch adds default-off diagnostics and evidence only.  The next change
-should promote the framework-managed transfer branch into the normal Ascend
-path, remove the diagnostic environment gate, then re-run the full frozen P2
-acceptance gates (both corpus prompts and the required numerical checks).
-Only after that qualification may P3 be considered.
+The framework-managed transfers are now the normal Ascend CPU-expert path; the
+diagnostic environment gate has been removed.  Requalification passed the P2
+same-process/restart exact gates, Q2/H2 frozen numerical contract, 4/4-layer
+and 16/16-expert coverage, and the CPU-not-hit control.  The frozen downstream
+quality input is absent from both the repository and persisted A3 artifacts,
+so the quality A/B cannot be validly rerun yet.  P2 is consequently not marked
+fully qualified and P3 remains blocked.  See `06_P2_FIX_REQUALIFICATION.md`.
 
 ## Retained Round 2B correction
 

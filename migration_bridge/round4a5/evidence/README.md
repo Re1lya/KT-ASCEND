@@ -87,3 +87,12 @@ They retain the frozen P2 model, placement, worker count, sequential control,
 and request envelope.  Together with the failed D2H destination-clone control,
 they attribute the blocker to raw ACL transfer integration; see
 `../05_RAW_ACL_TRANSFER_ROOT_CAUSE.md`.
+
+## Post-fix requalification
+
+Large post-fix artifacts remain on A3 under `/workspace/results` (host-persisted
+at `/home/admin/kt-artifacts/round4a5`).  Their review hashes, commands, and
+gate status are recorded in `../06_P2_FIX_REQUALIFICATION.md`.  Q2 and H2
+passed the unchanged numerical contract; coverage reached 4/4 layers and
+16/16 selected experts.  The final quality A/B is intentionally not claimed:
+the frozen 128+128 quality input is unavailable.
